@@ -2,7 +2,7 @@
 
 A self-hosted setup script and web dashboard ("Xiaomi 5G CPE Pro Control") for the **Xiaomi 5G CPE Pro** router family — model **CB0401V2** (this project's own test device, sold under Deutsche Telekom's Magenta branding in Germany/Austria as the "Magenta Internet Box AX5400", used with any carrier SIM — the test device itself runs on an o2-DE SIM) and, very likely, the original **CB0401** (v1): both share the same Qualcomm IPQ5018 SoC and Quectel RG520N-family modem, and are listed under the identical "Xiaomi 5G CPE Pro" name in xmir-patcher's own device database — differing only in a modem firmware revision (R01 vs R03) that doesn't affect the AT-command surface this toolkit uses. Not independently verified on real CB0401 (v1) hardware, though.
 
-For people who own the hardware and want to actually control it: persistent root SSH, a clean local admin panel for cellular/Wi-Fi settings that the stock UI doesn't expose, and removal of the telemetry the stock firmware phones home with by default.
+For people who own the hardware and want to actually control it: persistent root SSH, a clean local admin panel for cellular/Wi-Fi settings that the stock UI doesn't expose, and **removal of the telemetry and junk cron jobs the stock firmware phones home with by default**.
 
 Everything runs **locally** and is **fully self-contained** — no third-party exploit tool, no Python required for the core setup. The GUI is a single native binary bound to `127.0.0.1`, driven entirely by SSH commands to your own router. Nothing here talks to any third-party server except the router itself and, if you turn on push notifications, either [ntfy.sh](https://ntfy.sh) or the Telegram Bot API (your choice).
 
