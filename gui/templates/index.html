@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>XIAOMI 5G CPE PRO CB0401V1/V2 Tune + Control</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --border: #2a2f3a;
+    --text: #e6e8eb; --muted: #8b93a3; --accent: #5b8cff; --good: #35c46f;
+    --bad: #ff5b6e; --warn: #f0a94e;
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f6f8; --panel: #ffffff; --panel2: #f0f1f4; --border: #dde1e6;
+    --text: #1a1d23; --muted: #6b7280; --accent: #3b6fe0; --good: #1f9d55;
+    --bad: #d92d3e; --warn: #b8790f;
+  }
+  .theme-toggle {
+    position: fixed; top: 20px; right: 24px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 20px; width: 40px; height: 40px;
+    font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 0; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin-bottom: 24px; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+  .card h2 { font-size: 14px; margin: 0 0 14px; display: flex; align-items: center; justify-content: space-between; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .row:last-child { border-bottom: none; }
+  .row .k { color: var(--muted); }
+  .row .v { font-weight: 600; }
+  .badge { padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .badge.sa { background: rgba(53,196,111,.15); color: var(--good); }
+  .badge.nsa { background: rgba(240,169,78,.15); color: var(--warn); }
+  .badge.off { background: rgba(255,91,110,.15); color: var(--bad); }
+  button, select, input[type=text], input[type=password] {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 10px; font-size: 13px; font-family: inherit;
+  }
+  input[type=text].full, input[type=password].full { width: 100%; box-sizing: border-box; }
+  .radio-row { display: flex; gap: 16px; align-items: center; }
+  .radio-row label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.danger { background: rgba(255,91,110,.12); border-color: var(--bad); color: var(--bad); }
+  button.region-active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  .toggle { display: inline-flex; align-items: center; gap: 8px; }
+  .switch { position: relative; width: 42px; height: 24px; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; inset: 0; background: #3a3f4c; border-radius: 24px; transition: .2s; cursor: pointer; }
+  .slider:before { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; }
+  input:checked + .slider { background: var(--good); }
+  input:checked + .slider:before { transform: translateX(18px); }
+  .bandlist { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }
+  .region-block { margin-bottom: 4px; }
+  .region-head { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+  .region-head .region-name { font-size: 12px; font-weight: 600; color: var(--text); }
+  .region-head button { padding: 3px 9px; font-size: 11px; }
+  .bandchip { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px; cursor: pointer; user-select: none; background: var(--panel2); }
+  .bandchip.on { background: rgba(91,140,255,.18); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .field-label { color: var(--muted); font-size: 12px; margin: 10px 0 4px; }
+  textarea { width: 100%; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: ui-monospace, monospace; font-size: 12px; min-height: 140px; }
+  .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .status-line { font-size: 12px; color: var(--muted); margin-top: 10px; min-height: 16px; }
+  .status-line.ok { color: var(--good); }
+  .status-line.error { color: var(--bad); }
+  .note { font-size: 12px; color: var(--muted); background: var(--panel2); border-radius: 6px; padding: 10px; margin-top: 10px; }
+  .refresh-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 0 4px; }
+  .copy-btn { position: absolute; top: 6px; right: 6px; font-size: 11px; padding: 3px 8px; }
+  .device-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .device-row:last-child { border-bottom: none; }
+  .device-row .mac { font-family: ui-monospace, monospace; color: var(--text); min-width: 150px; }
+  .device-row .host { color: var(--text); flex: 1; }
+  .device-row .ip { color: var(--muted); min-width: 110px; }
+  .device-row input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" id="themeToggle" onclick="toggleTheme()">🌙</button>
+
+<h1>XIAOMI 5G CPE PRO CB0401V1/V2 Tune + Control</h1>
+<div class="sub">Local panel for the router (192.168.31.1) &middot; <span id="lastUpdate">—</span> <button class="refresh-btn" onclick="loadStatus()">⟳</button></div>
+
+<div class="grid">
+
+  <!-- System health -->
+  <div class="card">
+    <h2>System <button class="refresh-btn" onclick="loadSystemHealth()">⟳</button></h2>
+    <div class="row"><span class="k">CPU usage</span><span class="v" id="sysCpu">—</span></div>
+    <div class="row"><span class="k">Memory free</span><span class="v" id="sysMem">—</span></div>
+    <div class="row"><span class="k">SoC temperature</span><span class="v" id="sysTemp">—</span></div>
+    <div class="row"><span class="k">Uptime</span><span class="v" id="sysUptime">—</span></div>
+    <div class="actions" style="margin-top:12px;">
+      <button class="danger" onclick="rebootRouter()">Reboot router</button>
+      <button class="danger" onclick="spoofVersion()">Spoof version → 0.0.1 (for downgrade via web UI)</button>
+    </div>
+    <div class="status-line" id="rebootStatus"></div>
+    <div class="status-line" id="spoofVersionStatus"></div>
+
+    <div class="row" style="margin-top:14px; border-top: 1px solid var(--border); padding-top:12px;"><b>2.4GHz channel scan</b></div>
+    <div class="field-label">Scans nearby networks and recommends the least congested channel (takes a few seconds)</div>
+    <div class="actions"><button class="primary" onclick="scanWifi()">Scan</button></div>
+    <div class="status-line" id="wifiScanStatus"></div>
+    <div id="wifiScanResult" style="margin-top:10px;"></div>
+  </div>
+
+  <!-- Cellular -->
+  <div class="card">
+    <h2>Cellular network <span id="saBadge" class="badge off">—</span></h2>
+    <div class="row">
+      <span class="k">Standalone (SA)</span>
+      <span class="toggle">
+        <span id="saStatusText" class="v">—</span>
+        <label class="switch">
+          <input type="checkbox" id="saToggle" onchange="toggleSA()">
+          <span class="slider"></span>
+        </label>
+      </span>
+    </div>
+    <div class="field-label" style="margin-top:16px;">Region (applies to all three lists below at once)</div>
+    <div class="actions" style="margin-bottom:6px;">
+      <button id="regionBtn_Europe" onclick="applyRegion('Europe')">Europe</button>
+      <button id="regionBtn_America" onclick="applyRegion('America')">America</button>
+      <button id="regionBtn_Asia" onclick="applyRegion('Asia')">Asia</button>
+      <button onclick="applyRegion(null)">Clear all</button>
+    </div>
+    <div class="field-label">NR5G bands (SA)</div>
+    <div class="bandlist" id="nr5gBands"></div>
+    <div class="field-label">NR5G bands (NSA)</div>
+    <div class="bandlist" id="nsaBands"></div>
+    <div class="field-label">LTE bands</div>
+    <div class="bandlist" id="lteBands"></div>
+    <div class="actions">
+      <button class="primary" onclick="saveBands()">Write to device</button>
+      <button class="danger" onclick="unlock5GBands()">Unlock extra 5G bands + SA (permanent hook)</button>
+    </div>
+    <div class="status-line" id="bandsStatus"></div>
+    <div class="status-line" id="unlockBandsStatus"></div>
+  </div>
+
+  <!-- WiFi -->
+  <div class="card">
+    <h2>Wi-Fi</h2>
+
+    <div class="row" style="margin-top:2px;"><b>5GHz</b><span class="badge" id="wifi5Badge">—</span></div>
+    <div class="row"><span class="k">SSID</span><span class="v" id="wifi5Ssid">—</span></div>
+    <div class="row"><span class="k">Clients</span><span class="v" id="wifi5Clients">—</span></div>
+    <div class="field-label">Channel (full list actually reported by the chip via iw phy)</div>
+    <select id="wifi5Channel" onchange="markWifiDirty()">
+      <option value="auto">Auto</option>
+      <option value="36">36</option><option value="40">40</option>
+      <option value="44">44</option><option value="48">48</option>
+      <option value="52">52 (DFS)</option><option value="56">56 (DFS)</option>
+      <option value="60">60 (DFS)</option><option value="64">64 (DFS)</option>
+      <option value="100">100 (DFS)</option><option value="104">104 (DFS)</option>
+      <option value="108">108 (DFS)</option><option value="112">112 (DFS)</option>
+      <option value="116">116 (DFS)</option><option value="120">120 (DFS)</option>
+      <option value="124">124 (DFS)</option><option value="128">128 (DFS)</option>
+      <option value="132">132 (DFS)</option><option value="136">136 (DFS)</option>
+      <option value="140">140 (DFS)</option>
+    </select>
+    <div class="field-label">Width (MHz)</div>
+    <select id="wifi5Bw" onchange="markWifiDirty()">
+      <option value="20">20</option><option value="40">40</option>
+      <option value="80">80</option><option value="160">160</option>
+    </select>
+    <div class="actions"><button class="primary" onclick="applyWifi('5')">Apply</button></div>
+    <div class="status-line" id="wifi5Status"></div>
+    <div class="field-label">TX Power: <span id="wifi5Txp">—</span></div>
+
+    <div class="row" style="margin-top:14px; border-top: 1px solid var(--border); padding-top:12px;"><b>2.4GHz</b><span class="badge" id="wifi24Badge">—</span></div>
+    <div class="row"><span class="k">SSID</span><span class="v" id="wifi24Ssid">—</span></div>
+    <div class="row"><span class="k">Clients</span><span class="v" id="wifi24Clients">—</span></div>
+    <div class="field-label">Channel</div>
+    <select id="wifi24Channel" onchange="markWifiDirty()">
+      <option value="auto">Auto</option>
+      <option value="1">1</option><option value="2">2</option>
+      <option value="3">3</option><option value="4">4</option><option value="5">5</option>
+      <option value="6">6</option><option value="7">7</option><option value="8">8</option>
+      <option value="9">9</option><option value="10">10</option><option value="11">11</option>
+      <option value="12">12</option><option value="13">13</option>
+    </select>
+    <div class="field-label">Width (MHz)</div>
+    <select id="wifi24Bw" onchange="markWifiDirty()">
+      <option value="20">20</option><option value="40">40</option>
+    </select>
+    <div class="actions"><button class="primary" onclick="applyWifi('2.4')">Apply</button></div>
+    <div class="status-line" id="wifi24Status"></div>
+    <div class="field-label">TX Power: <span id="wifi24Txp">—</span></div>
+  </div>
+
+  <!-- SSH -->
+  <div class="card">
+    <h2>Direct SSH access</h2>
+    <div class="row"><span class="k">Host</span><span class="v" id="sshHost">—</span></div>
+    <div class="row"><span class="k">User</span><span class="v">root</span></div>
+    <div class="field-label">Command (key-based, no password)</div>
+    <div style="position: relative;">
+      <textarea id="sshCmdKey" readonly style="min-height: 78px;"></textarea>
+      <button class="copy-btn" onclick="copyField('sshCmdKey', this)">Copy</button>
+    </div>
+    <div class="field-label">Command (password-based)</div>
+    <div style="position: relative;">
+      <textarea id="sshCmdPw" readonly style="min-height: 68px;"></textarea>
+      <button class="copy-btn" onclick="copyField('sshCmdPw', this)">Copy</button>
+    </div>
+
+    <div class="field-label" style="margin-top:14px; border-top: 1px solid var(--border); padding-top:12px;">Change root password</div>
+    <input type="password" class="full" id="newRootPassword" placeholder="New password (min. 4 characters)">
+    <div class="actions">
+      <button class="danger" onclick="setRootPassword()">Set new password</button>
+    </div>
+    <div class="status-line" id="rootPasswordStatus"></div>
+  </div>
+
+  <!-- Device monitor -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <h2>Device monitor <button class="refresh-btn" onclick="loadDeviceMonitor(true)">⟳</button></h2>
+
+    <div class="field-label">Notifications backend</div>
+    <div class="radio-row">
+      <label><input type="radio" name="notifyBackend" value="ntfy" onchange="onNotifyBackendChange(); markDeviceMonitorDirty();"> ntfy.sh</label>
+      <label><input type="radio" name="notifyBackend" value="telegram" onchange="onNotifyBackendChange(); markDeviceMonitorDirty();"> Telegram</label>
+    </div>
+    <div id="notifyNtfyFields">
+      <div class="row"><span class="k">Topic</span><span class="v" id="ntfyTopicLine">—</span></div>
+    </div>
+    <div id="notifyTelegramFields" style="display:none;">
+      <div class="field-label">Bot token (from @BotFather)</div>
+      <input type="password" class="full" id="telegramBotToken" placeholder="123456:AA..." oninput="markDeviceMonitorDirty()">
+      <div class="field-label">Chat ID</div>
+      <input type="text" class="full" id="telegramChatId" placeholder="e.g. 123456789" oninput="markDeviceMonitorDirty()">
+    </div>
+    <div class="actions">
+      <button onclick="saveNotifyConfig()">Save notification settings</button>
+    </div>
+    <div class="status-line" id="notifyConfigStatus"></div>
+
+    <div class="field-label" style="margin-top:10px;">Devices (currently online + those already whitelisted) — unchecked = you'll get a push notification if it connects</div>
+    <div id="deviceList" style="margin: 8px 0;"></div>
+    <div class="actions">
+      <button class="primary" onclick="saveWhitelist()">Save whitelist</button>
+    </div>
+    <div class="status-line" id="deviceMonitorStatus"></div>
+  </div>
+
+  <!-- Advanced -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <h2>Advanced: raw command on the router (unrestricted)</h2>
+    <textarea id="rawCmd" placeholder="e.g.: uci show wireless   /   cat /etc/config/network   /   anything"></textarea>
+    <div class="actions">
+      <button class="danger" onclick="runRaw()">Run</button>
+      <button onclick="dumpUci()">Full UCI dump (all router settings)</button>
+    </div>
+    <div class="field-label">Output</div>
+    <textarea id="rawOut" readonly style="min-height: 280px;"></textarea>
+  </div>
+
+</div>
+
+<script>
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  document.getElementById('themeToggle').textContent = theme === 'light' ? '🌙' : '☀️';
+}
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  const next = current === 'light' ? 'dark' : 'light';
+  applyTheme(next);
+  try { localStorage.setItem('theme', next); } catch (e) {}
+}
+(function () {
+  let saved = 'dark';
+  try { saved = localStorage.getItem('theme') || 'dark'; } catch (e) {}
+  applyTheme(saved);
+})();
+
+// Bands by region — with real overlap: the same band is deliberately listed
+// under several regions when it's actually deployed there by real operators
+// (e.g. n1/n3/n78 — both Europe and Asia; n28 — Asia/APT700 and Latin
+// America). Sources: GSMA/3GPP band allocation tables + real-world operator
+// deployment, cross-checked via research.
+const NR5G_REGIONS = {
+  // n28 and n77 were added to Europe not just per documentation but on
+  // direct evidence: this is the FACTORY list on this exact device
+  // (Magenta/o2 DE) — a real European carrier keeps them enabled by default.
+  'Europe':  [1, 3, 7, 8, 20, 28, 38, 75, 77, 78],
+  'America': [2, 5, 12, 25, 41, 66, 70, 71, 77],
+  'Asia':    [1, 3, 5, 7, 8, 28, 38, 40, 41, 75, 77, 78, 79],
+};
+const LTE_REGIONS = {
+  'Europe':  [1, 3, 7, 8, 20, 28, 32, 38],
+  'America': [2, 4, 5, 12, 13, 14, 17, 25, 26, 28, 29, 30, 41, 46, 48, 66, 71],
+  'Asia':    [1, 3, 5, 7, 8, 18, 19, 20, 28, 38, 39, 40, 41, 42, 43],
+};
+const NR5G_ALL = Array.from(new Set(Object.values(NR5G_REGIONS).flat())).sort((a,b)=>a-b);
+const LTE_ALL  = Array.from(new Set(Object.values(LTE_REGIONS).flat())).sort((a,b)=>a-b);
+
+let currentBands = { nr5g_band: '', nsa_nr5g_band: '', lte_band: '' };
+// Same idea as deviceMonitorDirty: loadStatus() runs every 20s and used to
+// overwrite an in-progress band-chip edit or a picked-but-not-yet-applied
+// Wi-Fi channel/width before you got to click Write to device / Apply.
+let bandsDirty = false;
+let wifiDirty = false;
+function markWifiDirty() { wifiDirty = true; }
+
+// Flat chip list — no repeated region headers inside each block. The region
+// is now chosen ONCE at the top (applyRegion) and immediately sets chips
+// across all three lists.
+function renderBandChips(containerId, allBands, activeStr, key) {
+  const active = new Set((activeStr || '').split(':').filter(Boolean).map(Number));
+  const el = document.getElementById(containerId);
+  el.innerHTML = '';
+  allBands.forEach(b => {
+    const chip = document.createElement('div');
+    chip.className = 'bandchip' + (active.has(b) ? ' on' : '');
+    chip.textContent = 'n' + b;
+    chip.onclick = () => {
+      if (active.has(b)) active.delete(b); else active.add(b);
+      currentBands[key] = Array.from(active).sort((a,b)=>a-b).join(':');
+      selectedRegion = null; // manual chip edit — no longer a "clean" region preset
+      bandsDirty = true;
+      highlightRegionButton();
+      renderBandChips(containerId, allBands, currentBands[key], key);
+    };
+    el.appendChild(chip);
+  });
+}
+
+function renderAllBandLists() {
+  renderBandChips('nr5gBands', NR5G_ALL, currentBands.nr5g_band, 'nr5g_band');
+  renderBandChips('nsaBands', NR5G_ALL, currentBands.nsa_nr5g_band, 'nsa_nr5g_band');
+  renderBandChips('lteBands', LTE_ALL, currentBands.lte_band, 'lte_band');
+}
+
+let selectedRegion = null;
+
+function highlightRegionButton() {
+  ['Europe', 'America', 'Asia'].forEach(r => {
+    const btn = document.getElementById('regionBtn_' + r);
+    if (btn) btn.classList.toggle('region-active', r === selectedRegion);
+  });
+}
+
+// One button per region — applies that region's bands to ALL THREE lists
+// (NR5G SA, NR5G NSA, LTE) at once, instead of one at a time.
+function applyRegion(regionName) {
+  selectedRegion = regionName;
+  if (regionName === null) {
+    currentBands.nr5g_band = '';
+    currentBands.nsa_nr5g_band = '';
+    currentBands.lte_band = '';
+  } else {
+    currentBands.nr5g_band = NR5G_REGIONS[regionName].slice().sort((a,b)=>a-b).join(':');
+    currentBands.nsa_nr5g_band = currentBands.nr5g_band;
+    currentBands.lte_band = LTE_REGIONS[regionName].slice().sort((a,b)=>a-b).join(':');
+  }
+  highlightRegionButton();
+  renderAllBandLists();
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error || 'Error');
+  return json.data;
+}
+
+async function loadStatus() {
+  document.getElementById('lastUpdate').textContent = 'loading...';
+  try {
+    const data = await api('/api/status');
+    const m = data.modem || {};
+    const w = data.wifi || {};
+
+    // SA applies immediately on toggle (no separate "save" step), so it's
+    // always safe to sync from the server - unlike the band chips and Wi-Fi
+    // channel/width below, there's no in-progress edit to protect here.
+    const saOn = m.nr5g_disable_mode === '0';
+    document.getElementById('saToggle').checked = saOn;
+    document.getElementById('saStatusText').textContent = saOn ? 'on' : 'off';
+    const badge = document.getElementById('saBadge');
+    badge.textContent = saOn ? 'SA' : 'NSA/off';
+    badge.className = 'badge ' + (saOn ? 'sa' : 'nsa');
+
+    // Skip refreshing the band chips while there's an un-written edit
+    // (bandsDirty) - otherwise this runs every 20s and would silently
+    // discard a chip you'd just toggled before you got to click Write to
+    // device.
+    if (!bandsDirty) {
+      currentBands.nr5g_band = m.nr5g_band || '';
+      currentBands.nsa_nr5g_band = m.nsa_nr5g_band || '';
+      currentBands.lte_band = m.lte_band || '';
+
+      // If what's actually on the modem matches one of the presets, highlight
+      // the matching region button instead of just clearing everything.
+      selectedRegion = ['Europe', 'America', 'Asia'].find(r =>
+        currentBands.nr5g_band === NR5G_REGIONS[r].slice().sort((a,b)=>a-b).join(':') &&
+        currentBands.lte_band === LTE_REGIONS[r].slice().sort((a,b)=>a-b).join(':')
+      ) || null;
+      highlightRegionButton();
+
+      renderAllBandLists();
+    }
+
+    if (w['5']) {
+      document.getElementById('wifi5Ssid').textContent = w['5'].ssid || '—';
+      document.getElementById('wifi5Clients').textContent = w['5'].clients || '0';
+      document.getElementById('wifi5Badge').textContent = w['5'].channel ? (w['5'].channel + ' / ' + w['5'].width_mhz + 'MHz') : '—';
+      document.getElementById('wifi5Txp').textContent = w['5'].txpower_dbm != null ? (w['5'].txpower_dbm + ' dBm') : '—';
+      // Same protection for a picked-but-not-yet-applied channel/width.
+      if (!wifiDirty) {
+        if (w['5'].channel) document.getElementById('wifi5Channel').value = w['5'].channel;
+        if (w['5'].width_mhz) document.getElementById('wifi5Bw').value = w['5'].width_mhz;
+      }
+    }
+    if (w['2.4']) {
+      document.getElementById('wifi24Ssid').textContent = w['2.4'].ssid || '—';
+      document.getElementById('wifi24Clients').textContent = w['2.4'].clients || '0';
+      document.getElementById('wifi24Badge').textContent = w['2.4'].channel ? (w['2.4'].channel + ' / ' + w['2.4'].width_mhz + 'MHz') : '—';
+      document.getElementById('wifi24Txp').textContent = w['2.4'].txpower_dbm != null ? (w['2.4'].txpower_dbm + ' dBm') : '—';
+      if (!wifiDirty) {
+        if (w['2.4'].channel) document.getElementById('wifi24Channel').value = w['2.4'].channel;
+        if (w['2.4'].width_mhz) document.getElementById('wifi24Bw').value = w['2.4'].width_mhz;
+      }
+    }
+    document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('lastUpdate').textContent = 'load error: ' + e.message;
+  }
+}
+
+async function toggleSA() {
+  const enabled = document.getElementById('saToggle').checked;
+  const el = document.getElementById('bandsStatus');
+  el.textContent = 'applying...'; el.className = 'status-line';
+  try {
+    await api('/api/sa', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled})});
+    el.textContent = 'done'; el.className = 'status-line ok';
+    loadStatus();
+  } catch (e) {
+    el.textContent = 'error: ' + e.message; el.className = 'status-line error';
+  }
+}
+
+async function saveBands() {
+  const el = document.getElementById('bandsStatus');
+  el.textContent = 'applying (may take a couple seconds)...'; el.className = 'status-line';
+  try {
+    await api('/api/bands', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(currentBands)});
+    el.textContent = 'done'; el.className = 'status-line ok';
+    loadStatus();
+  } catch (e) {
+    el.textContent = 'error: ' + e.message; el.className = 'status-line error';
+  }
+}
+
+async function applyWifi(band) {
+  const suffix = band === '5' ? '5' : '24';
+  const channel = document.getElementById('wifi' + suffix + 'Channel').value;
+  const bw = document.getElementById('wifi' + suffix + 'Bw').value;
+  const el = document.getElementById('wifi' + suffix + 'Status');
+  el.textContent = 'applying, interface will briefly restart...'; el.className = 'status-line';
+  try {
+    await api('/api/wifi', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({band, channel, bw})});
+    el.textContent = 'done'; el.className = 'status-line ok';
+    setTimeout(loadStatus, 2000);
+  } catch (e) {
+    el.textContent = 'error: ' + e.message; el.className = 'status-line error';
+  }
+}
+
+function formatUptime(sec) {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return (d ? d + 'd ' : '') + h + 'h ' + m + 'm';
+}
+
+async function rebootRouter() {
+  if (!confirm('Reboot the router? Internet and Wi-Fi will drop for everyone in the house for 1-2 minutes.')) return;
+  const el = document.getElementById('rebootStatus');
+  el.textContent = 'sending command...'; el.className = 'status-line';
+  try {
+    await api('/api/reboot', {method: 'POST'});
+    el.textContent = 'router is rebooting — this page will reload itself in about a minute...';
+    el.className = 'status-line ok';
+    setTimeout(() => location.reload(), 75000);
+  } catch (e) {
+    el.textContent = 'error: ' + e.message; el.className = 'status-line error';
+  }
+}
+
+async function spoofVersion() {
+  if (!confirm("Spoof the reported firmware version to 0.0.1?\n\nThis lifts the stock web updater's downgrade block (Settings > Update > Local update) so you can flash an older firmware file. It's memory-only (a bind-mount) — nothing is written to flash, and it reverts on its own at the next reboot.")) return;
+  const el = document.getElementById('spoofVersionStatus');
+  el.textContent = 'applying...'; el.className = 'status-line';
+  try {
+    const data = await api('/api/spoof-version', {method: 'POST'});
+    el.textContent = 'done — router now reports: ' + data.reported;
+    el.className = 'status-line ok';
+  } catch (e) {
+    el.textContent = 'error: ' + e.message; el.className = 'status-line error';
+  }
+}
+
+async function unlock5GBands() {
+  if (!confirm("Install a permanent hook that unlocks Standalone mode and extra 5G bands (n1/n3/n7/n28/n38/n75/n78)?\n\nThis writes two small scripts to the router and reapplies them every time the cellular interface comes up, including after a reboot.")) return;
+  const el = document.getElementById('unlockBandsStatus');
+  el.textContent = 'applying...'; el.className = 'status-line';
+  try {
+    const data = await api('/api/unlock-5g-bands', {method: 'POST'});
+    el.textContent = data.result;
+    el.className = 'status-line ok';
+    loadStatus();
+  } catch (e) {
+    el.textContent = 'error: ' + e.message; el.className = 'status-line error';
+  }
+}
+
+async function scanWifi() {
+  const status = document.getElementById('wifiScanStatus');
+  const result = document.getElementById('wifiScanResult');
+  status.textContent = 'scanning (a few seconds)...'; status.className = 'status-line';
+  result.innerHTML = '';
+  try {
+    const data = await api('/api/wifi-scan?band=2.4');
+    status.textContent = `done, saw ${data.total_networks} networks`; status.className = 'status-line ok';
+    if (data.recommendation) {
+      const rec = document.createElement('div');
+      rec.className = 'note';
+      const scoreStr = Object.entries(data.recommendation.scores).map(([ch, s]) => `${ch}: ${s}`).join(' · ');
+      rec.innerHTML = `<b>Recommended channel: ${data.recommendation.best_channel}</b> — the interference score (lower = clearer) accounts for signal strength and overlap with neighboring channels, not just network count. ${scoreStr}`;
+      result.appendChild(rec);
+    }
+    data.channels.forEach(ch => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const names = ch.networks.slice(0, 3).map(n => n.ssid).join(', ');
+      const isRec = data.recommendation && ch.channel === data.recommendation.best_channel;
+      row.innerHTML = `<span class="k">Channel ${ch.channel}${isRec ? ' ✅' : ''}</span><span class="v">${ch.count} networks, strongest ${ch.strongest_signal} dBm (${names}${ch.networks.length > 3 ? ', …' : ''})</span>`;
+      result.appendChild(row);
+    });
+  } catch (e) {
+    status.textContent = 'error: ' + e.message; status.className = 'status-line error';
+  }
+}
+
+async function loadSystemHealth() {
+  try {
+    const d = await api('/api/system-health');
+    if (d.cpu_pct != null) {
+      document.getElementById('sysCpu').textContent = `${d.cpu_pct}%`;
+    }
+    if (d.mem_free_real_kb != null && d.mem_total_kb) {
+      const freeMb = Math.round(d.mem_free_real_kb / 1024);
+      const totalMb = Math.round(d.mem_total_kb / 1024);
+      document.getElementById('sysMem').textContent = `${freeMb} / ${totalMb} MB`;
+    }
+    if (d.temp_c_max != null) {
+      document.getElementById('sysTemp').textContent = `${d.temp_c_avg}°C (max ${d.temp_c_max}°C)`;
+    }
+    if (d.uptime_sec != null) {
+      document.getElementById('sysUptime').textContent = formatUptime(d.uptime_sec);
+    }
+  } catch (e) {
+    document.getElementById('sysCpu').textContent = 'error: ' + e.message;
+  }
+}
+
+function onNotifyBackendChange() {
+  const backend = document.querySelector('input[name=notifyBackend]:checked').value;
+  document.getElementById('notifyNtfyFields').style.display = backend === 'ntfy' ? '' : 'none';
+  document.getElementById('notifyTelegramFields').style.display = backend === 'telegram' ? '' : 'none';
+}
+
+async function saveNotifyConfig() {
+  const backend = document.querySelector('input[name=notifyBackend]:checked').value;
+  const body = { backend };
+  if (backend === 'telegram') {
+    body.telegram_bot_token = document.getElementById('telegramBotToken').value;
+    body.telegram_chat_id = document.getElementById('telegramChatId').value;
+  }
+  const el = document.getElementById('notifyConfigStatus');
+  el.textContent = 'saving...'; el.className = 'status-line';
+  try {
+    await api('/api/notify-config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    el.textContent = 'done'; el.className = 'status-line ok';
+    deviceMonitorDirty = false;
+    loadDeviceMonitor(true);
+  } catch (e) {
+    el.textContent = 'error: ' + e.message; el.className = 'status-line error';
+  }
+}
+
+// The periodic 60s refresh used to blindly rebuild this whole card,
+// wiping out a whitelist checkbox you'd just toggled or a Telegram
+// token/chat ID you were mid-typing, if you hadn't clicked Save yet.
+// This flag makes the periodic refresh skip itself while there's an
+// unsaved edit; loadDeviceMonitor(true) (the refresh button, and every
+// call right after a successful save) always goes through regardless.
+let deviceMonitorDirty = false;
+function markDeviceMonitorDirty() { deviceMonitorDirty = true; }
+
+async function loadDeviceMonitor(force) {
+  if (deviceMonitorDirty && !force) return;
+  try {
+    const data = await api('/api/device-monitor');
+    const notify = data.notify || {};
+    document.querySelectorAll('input[name=notifyBackend]').forEach(r => { r.checked = (r.value === notify.backend); });
+    document.getElementById('ntfyTopicLine').textContent = notify.ntfy_topic ? ('https://ntfy.sh/' + notify.ntfy_topic) : '—';
+    document.getElementById('telegramBotToken').value = notify.telegram_bot_token || '';
+    document.getElementById('telegramChatId').value = notify.telegram_chat_id || '';
+    onNotifyBackendChange();
+
+    const whitelist = new Set(data.whitelist);
+    // Merge "currently online" with "already whitelisted but offline" — so we
+    // don't lose track of a device that's just temporarily powered off.
+    const byMac = {};
+    data.devices.forEach(d => { byMac[d.mac] = d; });
+    data.whitelist.forEach(mac => { if (!byMac[mac]) byMac[mac] = { mac, ip: null, hostname: null }; });
+
+    const list = Object.values(byMac).sort((a, b) => a.mac.localeCompare(b.mac));
+    const el = document.getElementById('deviceList');
+    el.innerHTML = '';
+    list.forEach(d => {
+      const row = document.createElement('div');
+      row.className = 'device-row';
+      row.innerHTML = `
+        <input type="checkbox" data-mac="${d.mac}" onchange="markDeviceMonitorDirty()" ${whitelist.has(d.mac) ? 'checked' : ''}>
+        <span class="mac">${d.mac}</span>
+        <span class="host">${d.hostname || '<i style="color:var(--muted)">no name</i>'}</span>
+        <span class="ip">${d.ip || 'offline'}</span>
+      `;
+      el.appendChild(row);
+    });
+    deviceMonitorDirty = false;
+  } catch (e) {
+    document.getElementById('deviceMonitorStatus').textContent = 'error: ' + e.message;
+    document.getElementById('deviceMonitorStatus').className = 'status-line error';
+  }
+}
+
+async function saveWhitelist() {
+  const macs = Array.from(document.querySelectorAll('#deviceList input[type=checkbox]:checked'))
+    .map(cb => cb.dataset.mac);
+  const el = document.getElementById('deviceMonitorStatus');
+  el.textContent = 'saving...'; el.className = 'status-line';
+  try {
+    await api('/api/device-monitor/whitelist', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({macs})});
+    el.textContent = 'done'; el.className = 'status-line ok';
+    deviceMonitorDirty = false;
+    loadDeviceMonitor(true);
+  } catch (e) {
+    el.textContent = 'error: ' + e.message; el.className = 'status-line error';
+  }
+}
+
+async function setRootPassword() {
+  const input = document.getElementById('newRootPassword');
+  const password = input.value;
+  if (password.length < 4) { alert('Password should be at least 4 characters.'); return; }
+  if (!confirm('Change the router\'s root password?\n\nThe new password is written to /data/etc/shadow (confirmed to survive a reboot) and to this GUI\'s .env file, so self-heal keeps working. Make sure you\'ll remember it — there is no recovery besides a factory reset.')) return;
+  const el = document.getElementById('rootPasswordStatus');
+  el.textContent = 'applying...'; el.className = 'status-line';
+  try {
+    await api('/api/root-password', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({password})});
+    el.textContent = 'done — password changed on the router and saved to .env';
+    el.className = 'status-line ok';
+    input.value = '';
+  } catch (e) {
+    el.textContent = 'error: ' + e.message; el.className = 'status-line error';
+  }
+}
+
+async function copyField(id, btn) {
+  const text = document.getElementById(id).value;
+  const original = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = 'Copied';
+  } catch (e) {
+    // fallback for contexts without the Clipboard API
+    const ta = document.getElementById(id);
+    ta.select();
+    document.execCommand('copy');
+    btn.textContent = 'Copied';
+  }
+  setTimeout(() => { btn.textContent = original; }, 1500);
+}
+
+function autoSizeTextarea(el) {
+  el.style.height = 'auto';
+  el.style.height = (el.scrollHeight + 2) + 'px';
+}
+
+async function loadSshInfo() {
+  try {
+    const data = await api('/api/ssh-info');
+    document.getElementById('sshHost').textContent = data.host;
+    const keyEl = document.getElementById('sshCmdKey');
+    const pwEl = document.getElementById('sshCmdPw');
+    keyEl.value = data.cmd_key;
+    pwEl.value = data.cmd_pw;
+    autoSizeTextarea(keyEl);
+    autoSizeTextarea(pwEl);
+  } catch (e) { /* silently ignore on initial load */ }
+}
+
+async function dumpUci() {
+  const out = document.getElementById('rawOut');
+  out.value = 'running uci show...';
+  try {
+    const data = await api('/api/uci-dump');
+    out.value = data.output;
+  } catch (e) {
+    out.value = 'error: ' + e.message;
+  }
+}
+
+async function runRaw() {
+  const cmd = document.getElementById('rawCmd').value;
+  const out = document.getElementById('rawOut');
+  out.value = 'running...';
+  try {
+    const data = await api('/api/raw', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({cmd})});
+    out.value = data.output;
+  } catch (e) {
+    out.value = 'error: ' + e.message;
+  }
+}
+
+loadStatus();
+loadSshInfo();
+loadDeviceMonitor();
+loadSystemHealth();
+setInterval(loadStatus, 20000);
+setInterval(loadDeviceMonitor, 60000);
+setInterval(loadSystemHealth, 20000);
+</script>
+
+</body>
+</html>

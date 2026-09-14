@@ -1,0 +1,17 @@
+# Secrets / generated locally by setup.sh / setup.ps1 — never commit these
+gui/router_key
+gui/router_key.pub
+gui/.env
+
+# Go build output
+gui/cb0401-tune-control
+gui/cb0401-tune-control.exe
+gui/dist/
+
+# Local backups you may have made of your router
+backups/
+*.bin
+
+# OS noise
+.DS_Store
+Thumbs.db

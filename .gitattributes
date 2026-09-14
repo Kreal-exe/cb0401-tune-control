@@ -1,0 +1,6 @@
+# These are POSIX shell scripts meant to run on the router's BusyBox ash —
+# a CRLF line ending breaks them there (e.g. a "\r" tacked onto the shebang
+# line). Force LF on checkout regardless of the cloning machine's git
+# config (Windows' core.autocrlf=true would otherwise convert them).
+*.sh text eol=lf
+router/* text eol=lf
