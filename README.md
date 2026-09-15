@@ -83,7 +83,7 @@ Two extra, opt-in flags exist for things that are genuinely useful for *some* pe
 
 Pass these to `setup.sh`/`setup.ps1` via the `CLEANUP_FLAGS` environment variable (e.g. `CLEANUP_FLAGS=--all ./setup.sh`) so you don't need a manual follow-up SSH session.
 
-**On persistence:** service disables (`--disable-mesh`/`--disable-messagingagent`/breakpad) only take effect through `/etc/init.d/X disable`, which lives on this router's ramfs-mounted `/etc` — confirmed live that they silently revert to "enabled" after a reboot, the same root cause as the [root password issue](#why-we-never-touch-the-root-password). `cleanup.sh` works around this the same way `bootstrap/open_ssh.sh` keeps SSH open: it installs a small cron job that reapplies the disables within a minute of every boot. The telemetry/dead-cron removals above don't need this — they edit `/etc/crontabs/root`, which is a symlink into persistent storage and survives reboots on its own.
+**On persistence:** service disables (`--disable-mesh`/`--disable-messagingagent`/breakpad) only take effect through `/etc/init.d/X disable`, which lives on this router's ramfs-mounted `/etc` — confirmed live that they silently revert to "enabled" after a reboot, the same root cause as the [root password not sticking without the direct-write fix](#changing-the-root-password). `cleanup.sh` works around this the same way `bootstrap/open_ssh.sh` keeps SSH open: it installs a small cron job that reapplies the disables within a minute of every boot. The telemetry/dead-cron removals above don't need this — they edit `/etc/crontabs/root`, which is a symlink into persistent storage and survives reboots on its own.
 
 ## Known hardware limitations
 
@@ -92,16 +92,15 @@ These were all confirmed through direct testing on real hardware this project wa
 - **TX power cannot be changed from software.** `iw set txpower fixed` returns success but has zero measurable effect; the vendor `cfg80211tool s_txpow` returns `EINVAL`; `get_maxpower`/`get_minpower` are unimplemented stubs. The GUI shows the real value read-only.
 - **`qca_spectral`** is loaded and referenced by the driver stack, but exposes no usable userspace interface anywhere (checked `cfg80211tool`, `iwpriv`, and the full `debugfs` tree) — it appears to be purely an internal DFS radar-detection dependency, not something you can point at a spectrum analyzer.
 - **No Docker/Entware/Node.js.** Persistent storage is a single ~20MB partition; there simply isn't room, and the vendor's `opkg` feed is dead (404).
-- **The root password cannot be permanently changed.** `/etc/shadow` is a symlink into the router's tiny persistent partition sitting under a `ramfs`-mounted `/etc`, and password changes made the usual way get lost on reboot. This toolkit works around this entirely by leaving the factory password alone and relying on SSH keys for everything after the initial bootstrap — see [Why we never touch the root password](#why-we-never-touch-the-root-password).
 - **A `wifi reload` briefly drops every client**, trusted or not. This is triggered by changing Wi-Fi channel/width and by the `red alert`/`all clear` commands — it's a platform limitation of this driver stack, not a bug in this toolkit.
 
-## Why we never touch the root password
+## Changing the root password
 
-Early iterations of this project changed the root password to something other than the factory default. That turned out to not survive a reboot — the fix (writing the password hash to the real persistent-storage path instead of the symlink that gets reset) exists but has not been proven safe across every firmware/kernel combination this router ships with. Given that a failed password change can lock you out of your own hardware, this toolkit made a deliberate choice: **leave the factory `root`/`root` login alone**, and rely entirely on an SSH key for day-to-day access instead. The GUI always tries the key first, and only falls back to the factory password (to silently reinstall the key) if the key stops working — for instance after a factory-reset-like event that wipes `/etc`.
+`/etc/shadow` is a symlink into the router's tiny persistent partition, but it sits under a `ramfs`-mounted `/etc` — a password change made the usual way (`passwd`, or editing that path) gets lost on the next reboot. The GUI's "Change root password" button works around this by writing the new hash directly to `/data/etc/shadow` (the real persistent path the symlink points at) instead of going through `/etc/shadow` itself — confirmed live to survive a reboot, unlike the naive approach.
 
-If you understand the risk and want to change it anyway, that's outside the scope of what this toolkit automates.
+The GUI always logs in with its own SSH key first, and only falls back to a password (to silently reinstall the key) if the key stops working — for instance after a factory-reset-like event that wipes `/etc`. Whenever you change the password from the GUI, it updates the toolkit's own `.env` in the same step, so that fallback keeps using the current password rather than the stale factory one.
 
-This automatic fallback needs the `sshpass` tool, which `setup.sh` installs for you on macOS/Linux. It isn't available on Windows by default, so on Windows this one specific fallback is a no-op — the GUI still works normally, and if the router ever does lose the key, just re-run `setup.ps1` to reinstall it.
+This password fallback needs the `sshpass` tool, which `setup.sh` installs for you on macOS/Linux. It isn't available on Windows by default, so on Windows this one specific fallback is a no-op — the GUI still works normally, and if the router ever does lose the key, just re-run `setup.ps1` to reinstall it.
 
 ## Getting started
 
