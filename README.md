@@ -36,9 +36,9 @@ This whole flow (the password derivation, the always-on Telnet, the dropbear/nvr
 A single-page dashboard covering:
 
 - **System** — real-time CPU%, memory, SoC temperature, uptime, reboot button, a version-spoof button that lifts the stock updater's downgrade block (memory-only, reverts on reboot — see [Firmware downgrade & 5G band unlock](#firmware-downgrade--5g-band-unlock)), plus a 2.4GHz spectrum scan with a channel recommendation (scores every candidate channel by overlap-weighted, signal-weighted interference from every network your router can see, not just exact-channel matches).
-- **Cellular** — Standalone (SA) 5G toggle, region-based band presets (Europe/Americas/Asia-Pacific/etc., built from GSMA/3GPP allocation tables), and raw band chips for full manual control via `AT+QNWPREFCFG`.
+- **Cellular** — Standalone (SA) 5G toggle, region-based band presets (Europe/America/Asia, built from GSMA/3GPP allocation tables and, for Europe, this project's own factory-default bands), and raw band chips for full manual control via `AT+QNWPREFCFG`.
 - **Wi-Fi** — 2.4GHz and 5GHz channel/width, live client count, read-only TX power display (see [Known hardware limitations](#known-hardware-limitations) for why it's read-only).
-- **SSH** — one-click-copy commands for both key-based and password-based access, pre-filled with the `ssh-rsa` compatibility flags this router's old dropbear needs to work with a modern OpenSSH client.
+- **SSH** — one-click-copy commands for both key-based and password-based access, pre-filled with the `ssh-rsa` compatibility flags this router's old dropbear needs to work with a modern OpenSSH client, plus a field to change the router's root password (see [Changing the root password](#changing-the-root-password)).
 - **Device monitor** — every device currently on your network, with a checkbox whitelist; unlisted devices trigger a push notification. Also where you switch between ntfy.sh and Telegram, or update your Telegram bot token/chat ID, at any time.
 - **Advanced** — a raw SSH command box and a full `uci show` config dump, for anything the rest of the UI doesn't cover.
 
@@ -73,7 +73,7 @@ By default (`sh cleanup.sh`, no flags), the following is disabled — all verifi
 - **`sp_check.sh`** — a cron job that gzips and uploads `web.log` / `rom.log` / `privacy.log` / `pri_rom.log` to a Xiaomi telemetry endpoint every 5 minutes.
 - **`otapredownload`** — automatic firmware pre-download, which also has the side effect of silently overwriting any manual firmware/config changes you've made.
 - **`breakpad`** — Google Breakpad crash reporter, uploads crash dumps to Xiaomi.
-- A handful of dead cron entries left over from other hardware variants (referencing scripts and directories that don't even exist on this firmware).
+- A couple of dead cron entries left over from other hardware variants (referencing scripts and directories that don't even exist on this firmware).
 
 Two extra, opt-in flags exist for things that are genuinely useful for *some* people and not others:
 
@@ -139,7 +139,7 @@ Once setup finishes, the GUI opens automatically at `http://127.0.0.1:5757`.
 Both live as one-click buttons in the GUI itself — no separate script, no xmir-patcher, since they only need the SSH access this toolkit already has:
 
 - **System card → "Spoof version → 0.0.1"** — lifts the stock web updater's downgrade block (Settings > Update > Local update), if you need to flash an older firmware version. Memory-only (a bind-mount), reverts on its own at the next reboot.
-- **Cellular card → "Unlock extra 5G bands + SA"** — installs a permanent hook that unlocks Standalone mode and extra 5G bands (n1/n3/n7/n28/n38/n75/n78) on the cellular modem, adapted from [davidohne/xiaomi_cb0401](https://github.com/davidohne/xiaomi_cb0401). Reapplies itself every time the cellular interface comes up, including after a reboot.
+- **Cellular card → "Unlock extra 5G bands + SA"** — installs a permanent hook (adapted from [davidohne/xiaomi_cb0401](https://github.com/davidohne/xiaomi_cb0401)) that unlocks Standalone mode and enables an extra-band list on the cellular modem (n1/n3/n7/n28/n38/n75/n78 by default, or whatever's already configured if you install this after picking your own bands). It reapplies on every `wan_2` reconnect, including after a reboot — and from then on, applying a region preset or manual band selection from the Cellular card keeps that hook in sync, so a reconnect never reverts you back to the installed default.
 
 Both modify firmware/modem configuration and aren't covered by the same idempotency guarantees as the rest of this toolkit — read the button's confirmation prompt before clicking.
 
@@ -148,7 +148,7 @@ Both modify firmware/modem configuration and aren't covered by the same idempote
 - This project modifies firmware behavior on a device that may be leased from, or branded by, your carrier. Check your terms of service; use at your own risk.
 - Opening SSH relies on a default password derived from your router's serial number (see [How SSH access is opened](#how-ssh-access-is-opened)) — this is stock Xiaomi firmware behavior, not something this project introduces, but it does mean anyone on your LAN who can reach the router's web UI before you run setup could derive that password too. Run setup promptly after unboxing/resetting the device.
 - The GUI has no authentication of its own — it relies entirely on binding to `127.0.0.1`. Do not expose port 5757 to your network.
-- `gui/router_key`, `gui/router_key.pub`, and `gui/.env` (which holds your ntfy topic or Telegram bot token) are generated locally by setup and are gitignored — never commit or share them.
+- `gui/router_key`, `gui/router_key.pub`, and `gui/.env` (which holds the router's root password, plus your ntfy topic or Telegram bot token) are generated locally by setup and are gitignored — never commit or share them.
 
 ## License
 
