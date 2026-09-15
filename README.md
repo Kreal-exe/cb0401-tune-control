@@ -13,7 +13,7 @@ Everything runs **locally** and is **fully self-contained** — no third-party e
 Run once, `setup.sh` (macOS/Linux) or `setup.ps1` (Windows) will:
 
 1. Open persistent root SSH on the router (`bootstrap/open_ssh.sh` / `.ps1`) — see [How SSH access is opened](#how-ssh-access-is-opened) below for exactly how and why this works. Skipped if SSH already works; falls back to a password-based key install if it doesn't apply. A dedicated SSH key for the toolkit is installed in the same step, so every later step (and the GUI itself) never needs your password again.
-2. Set up push notifications and remote device-block commands: pick either a random, private [ntfy.sh](https://ntfy.sh) topic (zero setup) or a Telegram bot (needs a token + your chat ID), and install two small scripts on the router's crontab — one that pings you when an unknown device joins your Wi-Fi, one that lets you reply with commands like `block` or `red alert` to react from your phone. Switchable later from the GUI's Device monitor card without re-running setup — see [Push notifications & remote commands](#push-notifications--remote-commands-optional).
+2. Set up push notifications and remote device-block commands: pick either a random, private [ntfy.sh](https://ntfy.sh) topic (zero setup) or a Telegram bot (needs a token + your chat ID), wire an instant new-device alert straight into dnsmasq (fires the moment a device gets a DHCP lease, no polling), and install one small script on the router's crontab that lets you reply with commands like `block` or `red alert` to react from your phone. Switchable later from the GUI's Device monitor card without re-running setup — see [Push notifications & remote commands](#push-notifications--remote-commands-optional).
 3. Copy `router/cleanup.sh` onto the router and run it, removing telemetry uploads and dead cron jobs (see [What gets cleaned up](#what-gets-cleaned-up) below).
 4. Build (if needed) and launch the GUI at `http://127.0.0.1:5757` — a single Go binary, nothing to install to run it.
 
@@ -47,7 +47,7 @@ A single-page dashboard covering:
 
 ## Push notifications & remote commands (optional)
 
-The router will ping you whenever an unrecognized device joins your network, and you can reply directly from the notification:
+The router will ping you the instant an unrecognized device joins your network — the alert is wired directly into dnsmasq's own `--dhcp-script` hook (`dhcp_notify.sh`), which fires exactly once per DHCP lease granted, not on a polling timer. There's no delay waiting for a periodic check, and nothing runs on the router in between actual connection events. You can reply directly from the notification:
 
 | Reply | Effect |
 |---|---|
@@ -64,6 +64,8 @@ You choose the delivery backend during setup (or later, from the GUI's Device mo
 Either way, the credential (ntfy topic, or Telegram bot token + chat ID) is stored only in `gui/.env` on your machine and `/etc/crontabs/patches/notify.conf` on the router — both gitignored/generated locally, never part of this repository.
 
 The first time you set a backend up (or whenever you switch it, or change the Telegram token/chat ID), you'll get a one-time welcome message through it listing the commands above — so you don't have to come back to this README to remember them once an actual alert shows up.
+
+`device_monitor.sh` is still on the router alongside `dhcp_notify.sh`, but only runs once during setup — it scans whatever's already connected at that point so those devices are seeded as "already seen" instead of all alerting at once the moment the dnsmasq hook goes live. After that, it's unused unless you re-run setup.
 
 ## What gets cleaned up
 

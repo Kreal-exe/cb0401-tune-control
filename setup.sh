@@ -195,31 +195,44 @@ TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID
 EOF
 cp "$REPO_DIR/router/notify_common.sh" "$TMP_DIR/notify_common.sh"
 cp "$REPO_DIR/router/device_monitor.sh" "$TMP_DIR/device_monitor.sh"
+cp "$REPO_DIR/router/dhcp_notify.sh" "$TMP_DIR/dhcp_notify.sh"
 cp "$REPO_DIR/router/command_watcher.sh" "$TMP_DIR/command_watcher.sh"
 cp "$REPO_DIR/router/cleanup.sh" "$TMP_DIR/cleanup.sh"
 
 scp_to_router \
   "$TMP_DIR"/notify.conf "$TMP_DIR"/notify_common.sh "$TMP_DIR"/device_monitor.sh \
-  "$TMP_DIR"/command_watcher.sh "$TMP_DIR"/cleanup.sh \
+  "$TMP_DIR"/dhcp_notify.sh "$TMP_DIR"/command_watcher.sh "$TMP_DIR"/cleanup.sh \
   "root@$ROUTER_IP:/tmp/" >/dev/null
 rm -rf "$TMP_DIR"
 
+# New-device alerts fire the instant dnsmasq grants a lease (dhcp_notify.sh,
+# wired as dnsmasq's own --dhcp-script hook below) instead of on a polling
+# timer - no delay, and nothing runs on the router between actual events.
+# device_monitor.sh is kept only for the one-shot baseline scan right after
+# install (so devices already connected before setup get seeded into
+# notified_macs.txt instead of alerting the moment the hook goes live) and
+# as a manual re-scan escape hatch; the old cron entry that used to poll it
+# every 3 minutes is removed if this is a re-run of an older install.
 ssh "${SSH_OPTS[@]}" -i "$KEY_PATH" "root@$ROUTER_IP" '
   mkdir -p /etc/crontabs/patches
   cp /tmp/notify.conf /etc/crontabs/patches/notify.conf
   chmod 600 /etc/crontabs/patches/notify.conf
   cp /tmp/notify_common.sh /etc/crontabs/patches/notify_common.sh
   cp /tmp/device_monitor.sh /etc/crontabs/patches/device_monitor.sh
+  cp /tmp/dhcp_notify.sh /etc/crontabs/patches/dhcp_notify.sh
   cp /tmp/command_watcher.sh /etc/crontabs/patches/command_watcher.sh
   rm -f /etc/crontabs/patches/ntfy_command_watcher.sh
-  chmod +x /etc/crontabs/patches/notify_common.sh /etc/crontabs/patches/device_monitor.sh /etc/crontabs/patches/command_watcher.sh
+  chmod +x /etc/crontabs/patches/notify_common.sh /etc/crontabs/patches/device_monitor.sh /etc/crontabs/patches/dhcp_notify.sh /etc/crontabs/patches/command_watcher.sh
   touch /etc/crontabs/patches/known_macs.txt
-  sed -i "/ntfy_command_watcher\.sh/d" /etc/crontabs/root 2>/dev/null || true
-  grep -q device_monitor.sh /etc/crontabs/root 2>/dev/null || echo "*/3 * * * * sh /etc/crontabs/patches/device_monitor.sh" >> /etc/crontabs/root
+  sh /etc/crontabs/patches/device_monitor.sh
+  uci set dhcp.@dnsmasq[0].dhcpscript="/etc/crontabs/patches/dhcp_notify.sh"
+  uci commit dhcp
+  /etc/init.d/dnsmasq reload >/dev/null 2>&1 || /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+  sed -i "/ntfy_command_watcher\.sh/d; /\/device_monitor\.sh/d" /etc/crontabs/root 2>/dev/null || true
   grep -q command_watcher.sh /etc/crontabs/root 2>/dev/null || echo "*/2 * * * * sh /etc/crontabs/patches/command_watcher.sh" >> /etc/crontabs/root
   /etc/init.d/cron restart >/dev/null 2>&1 || true
 '
-echo "Device monitor and command watcher installed on the router's crontab."
+echo "New-device alerts wired to dnsmasq (instant, no polling); command watcher installed on the router's crontab."
 
 # --- 5. Cleanup --------------------------------------------------------
 

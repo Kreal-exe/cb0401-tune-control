@@ -220,6 +220,7 @@ $notifyConf = "NOTIFY_BACKEND=$notifyBackend`nNTFY_TOPIC=$ntfyTopic`nTELEGRAM_BO
 [System.IO.File]::WriteAllText((Join-Path $tmpDir 'notify.conf'), $notifyConf)
 Write-UnixScript (Join-Path $RepoDir 'router\notify_common.sh') (Join-Path $tmpDir 'notify_common.sh') $null
 Write-UnixScript (Join-Path $RepoDir 'router\device_monitor.sh') (Join-Path $tmpDir 'device_monitor.sh') $null
+Write-UnixScript (Join-Path $RepoDir 'router\dhcp_notify.sh') (Join-Path $tmpDir 'dhcp_notify.sh') $null
 Write-UnixScript (Join-Path $RepoDir 'router\command_watcher.sh') (Join-Path $tmpDir 'command_watcher.sh') $null
 Write-UnixScript (Join-Path $RepoDir 'router\cleanup.sh') (Join-Path $tmpDir 'cleanup.sh') $null
 
@@ -227,18 +228,31 @@ Write-UnixScript (Join-Path $RepoDir 'router\cleanup.sh') (Join-Path $tmpDir 'cl
 # ssh argument - Windows PowerShell's native-command argument marshalling
 # does not reliably escape embedded double quotes, and this command needs
 # them (for the crontab lines below).
+#
+# New-device alerts fire the instant dnsmasq grants a lease (dhcp_notify.sh,
+# wired as dnsmasq's own --dhcp-script hook below) instead of on a polling
+# timer - no delay, and nothing runs on the router between actual events.
+# device_monitor.sh is kept only for the one-shot baseline scan right after
+# install (so devices already connected before setup get seeded into
+# notified_macs.txt instead of alerting the moment the hook goes live) and
+# as a manual re-scan escape hatch; the old cron entry that used to poll it
+# every 3 minutes is removed if this is a re-run of an older install.
 $installCronScript = @'
 mkdir -p /etc/crontabs/patches
 cp /tmp/notify.conf /etc/crontabs/patches/notify.conf
 chmod 600 /etc/crontabs/patches/notify.conf
 cp /tmp/notify_common.sh /etc/crontabs/patches/notify_common.sh
 cp /tmp/device_monitor.sh /etc/crontabs/patches/device_monitor.sh
+cp /tmp/dhcp_notify.sh /etc/crontabs/patches/dhcp_notify.sh
 cp /tmp/command_watcher.sh /etc/crontabs/patches/command_watcher.sh
 rm -f /etc/crontabs/patches/ntfy_command_watcher.sh
-chmod +x /etc/crontabs/patches/notify_common.sh /etc/crontabs/patches/device_monitor.sh /etc/crontabs/patches/command_watcher.sh
+chmod +x /etc/crontabs/patches/notify_common.sh /etc/crontabs/patches/device_monitor.sh /etc/crontabs/patches/dhcp_notify.sh /etc/crontabs/patches/command_watcher.sh
 touch /etc/crontabs/patches/known_macs.txt
-sed -i "/ntfy_command_watcher\.sh/d" /etc/crontabs/root 2>/dev/null || true
-grep -q device_monitor.sh /etc/crontabs/root 2>/dev/null || echo "*/3 * * * * sh /etc/crontabs/patches/device_monitor.sh" >> /etc/crontabs/root
+sh /etc/crontabs/patches/device_monitor.sh
+uci set dhcp.@dnsmasq[0].dhcpscript="/etc/crontabs/patches/dhcp_notify.sh"
+uci commit dhcp
+/etc/init.d/dnsmasq reload >/dev/null 2>&1 || /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+sed -i "/ntfy_command_watcher\.sh/d; /\/device_monitor\.sh/d" /etc/crontabs/root 2>/dev/null || true
 grep -q command_watcher.sh /etc/crontabs/root 2>/dev/null || echo "*/2 * * * * sh /etc/crontabs/patches/command_watcher.sh" >> /etc/crontabs/root
 /etc/init.d/cron restart >/dev/null 2>&1 || true
 '@
@@ -247,14 +261,14 @@ $installCronScript = $installCronScript -replace "`r`n", "`n"
 
 Copy-ToRouter `
     (Join-Path $tmpDir 'notify.conf') (Join-Path $tmpDir 'notify_common.sh') (Join-Path $tmpDir 'device_monitor.sh') `
-    (Join-Path $tmpDir 'command_watcher.sh') (Join-Path $tmpDir 'cleanup.sh') (Join-Path $tmpDir 'install_cron.sh') `
+    (Join-Path $tmpDir 'dhcp_notify.sh') (Join-Path $tmpDir 'command_watcher.sh') (Join-Path $tmpDir 'cleanup.sh') (Join-Path $tmpDir 'install_cron.sh') `
     "root@${RouterIp}:/tmp/" | Out-Null
 $scpExit = $LASTEXITCODE
 Remove-Item -Recurse -Force $tmpDir
 if ($scpExit -ne 0) { Die 'Could not copy the router scripts over SSH (scp failed).' }
 
 & ssh @SshOpts -i $KeyPath "root@$RouterIp" 'sh /tmp/install_cron.sh'
-Write-Host 'Device monitor and command watcher installed on the router crontab.'
+Write-Host 'New-device alerts wired to dnsmasq (instant, no polling); command watcher installed on the router crontab.'
 
 # --- 5. Cleanup --------------------------------------------------------
 
