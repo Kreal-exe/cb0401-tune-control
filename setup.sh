@@ -113,8 +113,9 @@ else
       && sshpass -p "$KNOWN_PASSWORD" ssh "${SSH_OPTS[@]}" "root@$ROUTER_IP" "$INSTALL_CMD" 2>/dev/null; then
       say "Installed the key using the password already on file."
     else
-      echo "You will be asked for the router's SSH password now — type the factory"
-      echo "default (root), or whatever you've since changed it to."
+      echo "You will be asked for the router's SSH password now — the derived default"
+      echo "described in the README's 'How SSH access is opened' section, or whatever"
+      echo "you've since changed it to."
       echo
       ssh "${SSH_OPTS[@]}" "root@$ROUTER_IP" "$INSTALL_CMD" \
         || die "Could not reach the router over SSH with that password either. Check that it's reachable at $ROUTER_IP."

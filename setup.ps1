@@ -116,8 +116,9 @@ if ($keyWorks) {
         if ($installedWithKnownPassword) {
             Say 'Installed the key using the password already on file.'
         } else {
-            Write-Host 'You will be asked for the router SSH password now - type the factory'
-            Write-Host "default (root), or whatever you've since changed it to."
+            Write-Host 'You will be asked for the router SSH password now - the derived default'
+            Write-Host "described in the README's 'How SSH access is opened' section, or"
+            Write-Host "whatever you've since changed it to."
             Write-Host ''
             & ssh @SshOpts "root@$RouterIp" $remoteCmd
             if ($LASTEXITCODE -ne 0) { Die "Could not reach the router over SSH with that password either. Check that it's reachable at $RouterIp." }
