@@ -228,11 +228,12 @@ ssh "${SSH_OPTS[@]}" -i "$KEY_PATH" "root@$ROUTER_IP" '
   uci set dhcp.@dnsmasq[0].dhcpscript="/etc/crontabs/patches/dhcp_notify.sh"
   uci commit dhcp
   /etc/init.d/dnsmasq reload >/dev/null 2>&1 || /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-  sed -i "/ntfy_command_watcher\.sh/d; /\/device_monitor\.sh/d" /etc/crontabs/root 2>/dev/null || true
-  grep -q command_watcher.sh /etc/crontabs/root 2>/dev/null || echo "*/2 * * * * sh /etc/crontabs/patches/command_watcher.sh" >> /etc/crontabs/root
+  sed -i "/ntfy_command_watcher\.sh/d; /\/device_monitor\.sh/d; /command_watcher\.sh/d" /etc/crontabs/root 2>/dev/null || true
+  echo "* * * * * sh /etc/crontabs/patches/command_watcher.sh --ensure >/dev/null 2>&1" >> /etc/crontabs/root
   /etc/init.d/cron restart >/dev/null 2>&1 || true
+sh /etc/crontabs/patches/command_watcher.sh --restart
 '
-echo "New-device alerts wired to dnsmasq (instant, no polling); command watcher installed on the router's crontab."
+echo "New-device alerts wired to dnsmasq (instant, no polling); command listener (long polling) started on the router."
 
 # --- 5. Cleanup --------------------------------------------------------
 

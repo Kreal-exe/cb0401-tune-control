@@ -19,13 +19,25 @@
 #                             platform, there's no way around that.
 #   "all clear"             — removes the allow-list, back to normal.
 #
-# Meant to run from cron every couple of minutes (setup.sh installs it that
-# way). Optional component — only needed if you want to react to push
+# Modes:
+#   --daemon   long-lived listener: Telegram long polling (getUpdates with a
+#              50s server-side wait) or an open ntfy stream, so a reply is
+#              handled within about a second. The connection sits idle in
+#              between, so there's no polling load on the router.
+#   --ensure   start the daemon if it isn't running (cron runs this every
+#              minute as a watchdog - it also brings the daemon back after a
+#              reboot, since /tmp and the pid file don't survive one).
+#   --stop     stop the daemon.
+#   (none)     one-shot poll, the old behaviour; does nothing while the
+#              daemon is alive.
+#
+# Optional component — only needed if you want to react to push
 # notifications from your phone.
 #
 DIR=/etc/crontabs/patches
 WHITELIST="$DIR/known_macs.txt"
 LAST_SEEN="$DIR/last_seen.txt"
+PIDFILE=/tmp/command_watcher.pid
 
 # shellcheck disable=SC1091
 . "$DIR/notify_common.sh"
@@ -178,6 +190,13 @@ handle_message() {
     fi
 }
 
+daemon_pid() {
+    [ -f "$PIDFILE" ] || return 1
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && grep -q command_watcher "/proc/$pid/cmdline" 2>/dev/null || return 1
+    echo "$pid"
+}
+
 poll_ntfy() {
     STATE="$DIR/ntfy_since.txt"
     RESP="$DIR/ntfy_resp.json"
@@ -197,22 +216,7 @@ poll_ntfy() {
         # newline would lose exactly the one message that actually matters
         # when there's only a single result.
         (cat "$RESP"; echo) | while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            msg=$(echo "$line" | sed -n 's/.*"message":"\([^"]*\)".*/\1/p')
-            [ -z "$msg" ] && continue
-
-            # ntfy is a shared pub/sub topic, so our own outgoing
-            # notifications come back to us too — skip them by their exact
-            # title (not by loosely matching body text, which would also
-            # match the user's own "red alert" command and cause it to be
-            # ignored).
-            title=$(echo "$line" | sed -n 's/.*"title":"\([^"]*\)".*/\1/p')
-            case "$title" in
-                "New device"|"Blocked"|"Blocked (by IP)"|"Trusted"|"Trust failed"|"Red alert"|"All clear"|"Welcome")
-                    continue ;;
-            esac
-
-            handle_message "$msg"
+            handle_ntfy_line "$line"
         done
 
         date +%s > "$STATE"
@@ -220,14 +224,57 @@ poll_ntfy() {
     rm -f "$RESP"
 }
 
+# One line of ntfy's JSON stream -> command, if it is one.
+handle_ntfy_line() {
+    line="$1"
+    [ -z "$line" ] && return
+    msg=$(echo "$line" | sed -n 's/.*"message":"\([^"]*\)".*/\1/p')
+    [ -z "$msg" ] && return
+
+    # ntfy is a shared pub/sub topic, so our own outgoing
+    # notifications come back to us too — skip them by their exact
+    # title (not by loosely matching body text, which would also
+    # match the user's own "red alert" command and cause it to be
+    # ignored).
+    title=$(echo "$line" | sed -n 's/.*"title":"\([^"]*\)".*/\1/p')
+    case "$title" in
+        "New device"|"Blocked"|"Blocked (by IP)"|"Trusted"|"Trust failed"|"Red alert"|"All clear"|"Welcome")
+            return ;;
+    esac
+
+    handle_message "$msg"
+}
+
+# Daemon flavour of poll_ntfy: keeps the request open and handles each
+# event the moment it arrives. Reconnects every ~55s so a changed backend or
+# topic in notify.conf is picked up. The resume point is the event's own
+# timestamp + 1 (a command sent in the same second as the previous one could
+# be missed on a reconnect - not a real concern for a human typing replies).
+poll_ntfy_stream() {
+    STATE="$DIR/ntfy_since.txt"
+    [ -f "$STATE" ] || echo $(($(date +%s) - 300)) > "$STATE"
+    SINCE=$(cat "$STATE")
+
+    curl -s -N -m 55 "https://ntfy.sh/$NTFY_TOPIC/json?since=$SINCE" | while IFS= read -r line; do
+        handle_ntfy_line "$line"
+        t=$(echo "$line" | sed -n 's/.*"time":\([0-9]*\).*/\1/p')
+        [ -n "$t" ] && echo $((t + 1)) > "$STATE"
+    done
+}
+
 poll_telegram() {
     STATE="$DIR/telegram_offset.txt"
     RESP="$DIR/telegram_resp.json"
     [ -f "$STATE" ] || echo 0 > "$STATE"
     OFFSET=$(cat "$STATE")
+    # Server-side wait (0 = answer immediately, the one-shot behaviour; the
+    # daemon sets 50 so the request stays open until a message arrives).
+    WAIT="${TG_WAIT:-0}"
+    rc=1
 
-    if curl -s -m 15 -o "$RESP" \
-        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${OFFSET}&timeout=0"; then
+    if curl -s -m "${TG_CURL_MAX:-15}" -o "$RESP" \
+        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${OFFSET}&timeout=${WAIT}"; then
+        rc=0
         MAX_UPDATE_ID=""
         # Telegram's getUpdates response is a single JSON blob, but (unlike
         # ntfy's newline-delimited stream) it isn't fully compact: it
@@ -269,9 +316,67 @@ poll_telegram() {
         fi
     fi
     rm -f "$RESP"
+    return $rc
 }
 
-case "$NOTIFY_BACKEND" in
-    telegram) poll_telegram ;;
-    *)        poll_ntfy ;;
+run_daemon() {
+    echo $$ > "$PIDFILE"
+    trap 'rm -f "$PIDFILE"; exit 0' TERM INT
+    while :; do
+        # Re-read the backend config every round so a change made from the
+        # GUI takes effect within a minute, without restarting anything.
+        # shellcheck disable=SC1091
+        . "$DIR/notify_common.sh"
+        case "$NOTIFY_BACKEND" in
+            telegram)
+                TG_WAIT=50
+                TG_CURL_MAX=60
+                poll_telegram || sleep 5
+                sleep 1
+                ;;
+            *)
+                started=$(date +%s)
+                poll_ntfy_stream
+                # A stream that dies at once (no network) shouldn't spin.
+                [ $(($(date +%s) - started)) -lt 3 ] && sleep 5
+                ;;
+        esac
+    done
+}
+
+stop_daemon() {
+    pid=$(daemon_pid) || return 0
+    # The long-poll curl (and ntfy's pipeline) are children; stop them too or
+    # they linger until their own timeout.
+    for c in $(pgrep -P "$pid"); do kill "$c" 2>/dev/null; done
+    kill "$pid" 2>/dev/null
+    rm -f "$PIDFILE"
+}
+
+case "$1" in
+    --daemon) run_daemon ;;
+    --stop)   stop_daemon ;;
+    --restart)
+        stop_daemon
+        sh "$0" --ensure
+        ;;
+    --ensure)
+        daemon_pid >/dev/null && exit 0
+        # Detached (own session if setsid exists) so it outlives this cron job.
+        if command -v setsid >/dev/null 2>&1; then
+            setsid sh "$0" --daemon >/dev/null 2>&1 &
+        else
+            sh "$0" --daemon >/dev/null 2>&1 &
+        fi
+        ;;
+    *)
+        # One-shot poll (manual use). If the daemon is running it already
+        # owns the Telegram update stream - a second getUpdates caller would
+        # just fight it.
+        daemon_pid >/dev/null && exit 0
+        case "$NOTIFY_BACKEND" in
+            telegram) poll_telegram ;;
+            *)        poll_ntfy ;;
+        esac
+        ;;
 esac

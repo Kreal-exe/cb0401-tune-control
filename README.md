@@ -13,7 +13,7 @@ Everything runs **locally** and is **fully self-contained** — no third-party e
 Run once, `setup.sh` (macOS/Linux) or `setup.ps1` (Windows) will:
 
 1. Open persistent root SSH on the router (`bootstrap/open_ssh.sh` / `.ps1`) — see [How SSH access is opened](#how-ssh-access-is-opened) below for exactly how and why this works. Skipped if SSH already works; falls back to a password-based key install if it doesn't apply. A dedicated SSH key for the toolkit is installed in the same step, so every later step (and the GUI itself) never needs your password again.
-2. Set up push notifications and remote device-block commands: pick either a random, private [ntfy.sh](https://ntfy.sh) topic (zero setup) or a Telegram bot (needs a token + your chat ID), wire an instant new-device alert straight into dnsmasq (fires the moment a device gets a DHCP lease, no polling), and install one small script on the router's crontab that lets you reply with commands like `trust`, `block` or `red alert` to react from your phone. Switchable later from the GUI's Device monitor card without re-running setup — see [Push notifications & remote commands](#push-notifications--remote-commands-optional).
+2. Set up push notifications and remote device-block commands: pick either a random, private [ntfy.sh](https://ntfy.sh) topic (zero setup) or a Telegram bot (needs a token + your chat ID), wire an instant new-device alert straight into dnsmasq (fires the moment a device gets a DHCP lease, no polling), and start a small listener on the router that lets you reply with commands like `trust`, `block` or `red alert` to react from your phone (a one-line cron watchdog keeps it running). Switchable later from the GUI's Device monitor card without re-running setup — see [Push notifications & remote commands](#push-notifications--remote-commands-optional).
 3. Copy `router/cleanup.sh` onto the router and run it, removing telemetry uploads and dead cron jobs (see [What gets cleaned up](#what-gets-cleaned-up) below).
 4. Build (if needed) and launch the GUI at `http://127.0.0.1:5757` — a single Go binary, nothing to install to run it.
 
@@ -47,7 +47,7 @@ A single-page dashboard covering:
 
 ## Push notifications & remote commands (optional)
 
-The router will ping you the instant an unrecognized device joins your network — the alert is wired directly into dnsmasq's own `--dhcp-script` hook (`dhcp_notify.sh`), which fires exactly once per DHCP lease granted, not on a polling timer. There's no delay waiting for a periodic check, and nothing runs on the router in between actual connection events. You can reply directly from the notification:
+The router will ping you the instant an unrecognized device joins your network — the alert is wired directly into dnsmasq's own `--dhcp-script` hook (`dhcp_notify.sh`), which fires exactly once per DHCP lease granted, not on a polling timer. There's no delay waiting for a periodic check, and nothing runs on the router in between actual connection events. You can reply directly from the notification, and the reply is handled just as fast: `command_watcher.sh` runs as a small always-on listener that keeps one long-polling request to Telegram (or an open ntfy stream) waiting, so a reply is acted on within about a second. The connection sits idle in between (about 1 MB of RAM, no polling), and a once-a-minute cron watchdog restarts the listener after a reboot. The new-device alert also makes sure it's running the moment it fires.
 
 | Reply | Effect |
 |---|---|
@@ -58,7 +58,7 @@ The router will ping you the instant an unrecognized device joins your network �
 | `red alert` | Locks Wi-Fi down to only the devices on your whitelist. This requires a full radio reload on this hardware, so it will briefly disconnect *every* device, including trusted ones — there's no way around that on this platform. |
 | `all clear` | Removes the lockdown, back to normal |
 
-You choose the delivery backend during setup (or later, from the GUI's Device monitor card — the change takes effect within a couple of minutes, no re-running setup or restarting anything):
+You choose the delivery backend during setup (or later, from the GUI's Device monitor card — the change takes effect within a minute, no re-running setup or restarting anything):
 
 - **ntfy.sh** — zero setup: just install the free [ntfy app](https://ntfy.sh) and a random topic name is generated for you. The topic *is* the access control — anyone who knows it can read your alerts and send these commands, so treat it like a password. Since it's a shared pub/sub topic, the router's own outgoing alerts also come back to it; `command_watcher.sh` filters those out by their exact notification title so they aren't mistaken for a command.
 - **Telegram** — create a bot with [@BotFather](https://t.me/BotFather) (free, one-time) to get a bot token, then message your new bot once so it can see your chat ID. Commands are only ever accepted from that one chat ID, which is a tighter access model than a shared topic string — and since a bot never receives its own outgoing messages back, there's no self-message filtering needed on this path.

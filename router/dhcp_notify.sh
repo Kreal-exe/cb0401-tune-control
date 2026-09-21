@@ -42,3 +42,9 @@ Reply: trust / block / red alert"
 
 echo "$mac_u" >> "$NOTIFIED"
 printf '%s %s\n' "$mac_u" "$3" > "$LAST_SEEN"
+
+# The reply to this alert ("trust" / "block" / ...) is handled by the
+# long-polling listener in command_watcher.sh. Make sure it's up right now
+# rather than waiting for its once-a-minute cron watchdog. Backgrounded and
+# silenced so it can't hold up dnsmasq.
+( sh "$DIR/command_watcher.sh" --ensure >/dev/null 2>&1 & )

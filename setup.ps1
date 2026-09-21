@@ -252,9 +252,10 @@ sh /etc/crontabs/patches/device_monitor.sh
 uci set dhcp.@dnsmasq[0].dhcpscript="/etc/crontabs/patches/dhcp_notify.sh"
 uci commit dhcp
 /etc/init.d/dnsmasq reload >/dev/null 2>&1 || /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-sed -i "/ntfy_command_watcher\.sh/d; /\/device_monitor\.sh/d" /etc/crontabs/root 2>/dev/null || true
-grep -q command_watcher.sh /etc/crontabs/root 2>/dev/null || echo "*/2 * * * * sh /etc/crontabs/patches/command_watcher.sh" >> /etc/crontabs/root
+sed -i "/ntfy_command_watcher\.sh/d; /\/device_monitor\.sh/d; /command_watcher\.sh/d" /etc/crontabs/root 2>/dev/null || true
+echo "* * * * * sh /etc/crontabs/patches/command_watcher.sh --ensure >/dev/null 2>&1" >> /etc/crontabs/root
 /etc/init.d/cron restart >/dev/null 2>&1 || true
+sh /etc/crontabs/patches/command_watcher.sh --restart
 '@
 $installCronScript = $installCronScript -replace "`r`n", "`n"
 [System.IO.File]::WriteAllText((Join-Path $tmpDir 'install_cron.sh'), $installCronScript)
@@ -268,7 +269,7 @@ Remove-Item -Recurse -Force $tmpDir
 if ($scpExit -ne 0) { Die 'Could not copy the router scripts over SSH (scp failed).' }
 
 & ssh @SshOpts -i $KeyPath "root@$RouterIp" 'sh /tmp/install_cron.sh'
-Write-Host 'New-device alerts wired to dnsmasq (instant, no polling); command watcher installed on the router crontab.'
+Write-Host 'New-device alerts wired to dnsmasq (instant, no polling); command listener (long polling) started on the router.'
 
 # --- 5. Cleanup --------------------------------------------------------
 
