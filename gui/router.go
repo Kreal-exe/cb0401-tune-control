@@ -1036,6 +1036,8 @@ func setNotifyConfig(backend string, telegramBotToken, telegramChatID *string) (
 // is somehow called before the first full setup, for instance).
 func sendNotifyWelcomeMessage() {
 	msg := "Notifications are set up. When an unrecognized device joins your network, you'll get an alert here. Reply to it (or just message this chat) with:\n\n" +
+		"trust - adds the last unrecognized device seen to the whitelist (no more alerts for it)\n" +
+		"<MAC or IP> trust - whitelists a specific device\n" +
 		"block - blocks the last unrecognized device seen\n" +
 		"<MAC or IP> block - blocks a specific device\n" +
 		"red alert - locks Wi-Fi to only whitelisted devices (briefly disconnects everyone, including trusted devices - there's no way around that on this hardware)\n" +

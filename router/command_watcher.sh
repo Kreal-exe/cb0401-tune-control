@@ -2,6 +2,9 @@
 #
 # Polls for commands sent back by the user (via ntfy.sh or Telegram,
 # whichever notify_common.sh's config selects) and acts on them:
+#   "trust"                — adds the last device seen to the whitelist (and
+#                             lifts its block, if it had one).
+#   "<MAC> trust" / "<IP> trust" — same, for a specific device.
 #   "block"                — blocks the last device seen by device_monitor.sh
 #   "<MAC> block" / "<IP> block" (either order) — blocks a specific device.
 #                             If an IP is given, its current MAC is looked up
@@ -62,6 +65,40 @@ block_ip_only() {
     notify "Blocked (by IP)" "no_entry_sign" "$ip - no MAC found, this will not survive an IP change"
 }
 
+trust_mac() {
+    mac="$1"
+    # The GUI writes this file without a guaranteed trailing newline; make
+    # sure our append starts on its own line.
+    if [ -s "$WHITELIST" ] && [ -n "$(tail -c1 "$WHITELIST")" ]; then
+        echo >> "$WHITELIST"
+    fi
+    if grep -qiF "$mac" "$WHITELIST"; then
+        note="already on the whitelist"
+    else
+        echo "$mac" >> "$WHITELIST"
+        note="added to the whitelist"
+    fi
+
+    # If this device had been blocked earlier, trusting it should undo that.
+    rule="block_$(echo "$mac" | tr ':' '_')"
+    if uci -q get firewall."$rule" >/dev/null 2>&1; then
+        uci -q delete firewall."$rule"
+        uci commit firewall
+        /etc/init.d/firewall reload >/dev/null 2>&1
+        note="$note, block removed"
+    fi
+
+    # During a red alert the Wi-Fi allow-list is a copy of the whitelist
+    # taken when it was switched on, so refresh it (briefly drops clients,
+    # same as red alert itself).
+    if [ "$(uci -q get wireless.@wifi-iface[0].macfilter)" = "allow" ]; then
+        apply_macfilter allow
+        note="$note, red-alert allow-list refreshed"
+    fi
+
+    notify "Trusted" "white_check_mark" "$mac - $note"
+}
+
 apply_macfilter() {
     mode="$1"  # allow | disable
     for idx in 0 1; do
@@ -95,6 +132,26 @@ handle_message() {
     if echo "$msg" | grep -qi 'all[[:space:]]*clear'; then
         apply_macfilter disable
         notify "All clear" "white_check_mark" "Wi-Fi is back to normal."
+        return
+    fi
+
+    if echo "$msg" | grep -qiw 'trust'; then
+        mac=$(echo "$msg" | grep -oE '([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}' | head -1 | tr 'a-z' 'A-Z')
+        ip=$(echo "$msg" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
+
+        if [ -z "$mac" ] && [ -z "$ip" ] && [ -s "$LAST_SEEN" ]; then
+            # bare "trust" -> last device seen by the new-device alert
+            mac=$(awk '{print $1}' "$LAST_SEEN")
+        fi
+        if [ -z "$mac" ] && [ -n "$ip" ]; then
+            mac=$(resolve_mac_from_ip "$ip")
+        fi
+
+        if [ -n "$mac" ]; then
+            trust_mac "$mac"
+        else
+            notify "Trust failed" "warning" "No MAC found for that request - use the MAC address directly."
+        fi
         return
     fi
 
@@ -151,7 +208,7 @@ poll_ntfy() {
             # ignored).
             title=$(echo "$line" | sed -n 's/.*"title":"\([^"]*\)".*/\1/p')
             case "$title" in
-                "New device"|"Blocked"|"Blocked (by IP)"|"Red alert"|"All clear")
+                "New device"|"Blocked"|"Blocked (by IP)"|"Trusted"|"Trust failed"|"Red alert"|"All clear"|"Welcome")
                     continue ;;
             esac
 

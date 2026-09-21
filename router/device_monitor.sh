@@ -29,7 +29,7 @@ while read -r epoch mac ip host clientid; do
     [ "$host_short" = "*" ] && host_short="unnamed"
 
     notify "New device" "warning" "$mac_u | $ip | $host_short
-Reply: block / red alert"
+Reply: trust / block / red alert"
 
     echo "$mac_u" >> "$NOTIFIED"
     printf '%s %s\n' "$mac_u" "$ip" > "$LAST_SEEN"

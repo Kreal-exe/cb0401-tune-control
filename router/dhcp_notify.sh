@@ -38,7 +38,7 @@ host_short="$4"
 [ -z "$host_short" ] || [ "$host_short" = "*" ] && host_short="unnamed"
 
 notify "New device" "warning" "$mac_u | $3 | $host_short
-Reply: block / red alert"
+Reply: trust / block / red alert"
 
 echo "$mac_u" >> "$NOTIFIED"
 printf '%s %s\n' "$mac_u" "$3" > "$LAST_SEEN"

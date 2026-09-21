@@ -13,7 +13,7 @@ Everything runs **locally** and is **fully self-contained** — no third-party e
 Run once, `setup.sh` (macOS/Linux) or `setup.ps1` (Windows) will:
 
 1. Open persistent root SSH on the router (`bootstrap/open_ssh.sh` / `.ps1`) — see [How SSH access is opened](#how-ssh-access-is-opened) below for exactly how and why this works. Skipped if SSH already works; falls back to a password-based key install if it doesn't apply. A dedicated SSH key for the toolkit is installed in the same step, so every later step (and the GUI itself) never needs your password again.
-2. Set up push notifications and remote device-block commands: pick either a random, private [ntfy.sh](https://ntfy.sh) topic (zero setup) or a Telegram bot (needs a token + your chat ID), wire an instant new-device alert straight into dnsmasq (fires the moment a device gets a DHCP lease, no polling), and install one small script on the router's crontab that lets you reply with commands like `block` or `red alert` to react from your phone. Switchable later from the GUI's Device monitor card without re-running setup — see [Push notifications & remote commands](#push-notifications--remote-commands-optional).
+2. Set up push notifications and remote device-block commands: pick either a random, private [ntfy.sh](https://ntfy.sh) topic (zero setup) or a Telegram bot (needs a token + your chat ID), wire an instant new-device alert straight into dnsmasq (fires the moment a device gets a DHCP lease, no polling), and install one small script on the router's crontab that lets you reply with commands like `trust`, `block` or `red alert` to react from your phone. Switchable later from the GUI's Device monitor card without re-running setup — see [Push notifications & remote commands](#push-notifications--remote-commands-optional).
 3. Copy `router/cleanup.sh` onto the router and run it, removing telemetry uploads and dead cron jobs (see [What gets cleaned up](#what-gets-cleaned-up) below).
 4. Build (if needed) and launch the GUI at `http://127.0.0.1:5757` — a single Go binary, nothing to install to run it.
 
@@ -51,6 +51,8 @@ The router will ping you the instant an unrecognized device joins your network �
 
 | Reply | Effect |
 |---|---|
+| `trust` | Adds the last unrecognized device seen to the whitelist, so it never alerts again (and lifts its block, if it had one) |
+| `<MAC or IP> trust` | Same, for a specific device |
 | `block` | Blocks the last unrecognized device seen |
 | `<MAC or IP> block` | Blocks that specific device (resolves an IP to its current MAC first, and blocks by MAC — an IP-only block would stop protecting the device the moment its DHCP lease changes) |
 | `red alert` | Locks Wi-Fi down to only the devices on your whitelist. This requires a full radio reload on this hardware, so it will briefly disconnect *every* device, including trusted ones — there's no way around that on this platform. |
