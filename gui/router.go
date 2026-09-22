@@ -664,9 +664,9 @@ config include 'auto_5g_band_patch'
 	option path '/data/etc/crontabs/patches/5g_band_patch.sh'
 	option enabled '1'
 `
-	band5gPatchPath  = "/data/etc/crontabs/patches/5g_band_patch.sh"
-	band5gHookPath   = "/data/custom/hooks/99-set-5g-bands"
-	band5gPrefsPath  = "/data/custom/hooks/band_prefs.conf"
+	band5gPatchPath = "/data/etc/crontabs/patches/5g_band_patch.sh"
+	band5gHookPath  = "/data/custom/hooks/99-set-5g-bands"
+	band5gPrefsPath = "/data/custom/hooks/band_prefs.conf"
 )
 
 // updateBandPrefs writes the bands the hotplug hook (see band5gHookScript)
@@ -1066,6 +1066,8 @@ type deviceEntry struct {
 	Mac      string  `json:"mac"`
 	IP       *string `json:"ip"`
 	Hostname *string `json:"hostname"`
+	Vendor   *string `json:"vendor"`    // best-effort, from the device's MAC - see oui.go
+	MdnsName *string `json:"mdns_name"` // best-effort, only looked up when Hostname is empty - see mdns.go
 }
 
 type deviceMonitorState struct {
@@ -1093,9 +1095,15 @@ func getDeviceMonitorState() (deviceMonitorState, error) {
 				h := parts[3]
 				hostname = &h
 			}
-			devices = append(devices, deviceEntry{Mac: mac, IP: &ip, Hostname: hostname})
+			entry := deviceEntry{Mac: mac, IP: &ip, Hostname: hostname}
+			if org, ok := macVendor(mac); ok {
+				entry.Vendor = &org
+			}
+			devices = append(devices, entry)
 		}
 	}
+	fillMdnsNames(devices)
+
 	whitelistRaw, err := run("cat "+knownMacsFile+" 2>/dev/null || true", 0)
 	if err != nil {
 		return deviceMonitorState{}, err

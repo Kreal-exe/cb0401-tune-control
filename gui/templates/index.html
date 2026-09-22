@@ -266,6 +266,11 @@
 </div>
 
 <script>
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   document.getElementById('themeToggle').textContent = theme === 'light' ? '🌙' : '☀️';
@@ -635,10 +640,26 @@ async function loadDeviceMonitor(force) {
     list.forEach(d => {
       const row = document.createElement('div');
       row.className = 'device-row';
+      // hostname/mdns_name come from the device itself (DHCP option 12 /
+      // an mDNS reply) - not something to trust as safe HTML just because
+      // it's shown in your own admin panel. vendor is our own bundled
+      // IEEE data, not attacker-controlled, so it's fine as plain text
+      // built the same way.
+      let nameHtml;
+      if (d.hostname) {
+        nameHtml = escapeHtml(d.hostname);
+      } else if (d.mdns_name) {
+        nameHtml = escapeHtml(d.mdns_name) + ' <i style="color:var(--muted)">(via mDNS)</i>';
+      } else {
+        nameHtml = '<i style="color:var(--muted)">no name</i>';
+      }
+      const vendorHtml = d.vendor
+        ? ` <span style="color:var(--muted);font-size:11px;">— ${escapeHtml(d.vendor)}</span>`
+        : '';
       row.innerHTML = `
         <input type="checkbox" data-mac="${d.mac}" onchange="markDeviceMonitorDirty()" ${whitelist.has(d.mac) ? 'checked' : ''}>
         <span class="mac">${d.mac}</span>
-        <span class="host">${d.hostname || '<i style="color:var(--muted)">no name</i>'}</span>
+        <span class="host">${nameHtml}${vendorHtml}</span>
         <span class="ip">${d.ip || 'offline'}</span>
       `;
       el.appendChild(row);
