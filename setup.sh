@@ -198,6 +198,7 @@ cp "$REPO_DIR/router/device_monitor.sh" "$TMP_DIR/device_monitor.sh"
 cp "$REPO_DIR/router/dhcp_notify.sh" "$TMP_DIR/dhcp_notify.sh"
 cp "$REPO_DIR/router/command_watcher.sh" "$TMP_DIR/command_watcher.sh"
 cp "$REPO_DIR/router/sms_notify.sh" "$TMP_DIR/sms_notify.sh"
+cp "$REPO_DIR/router/json_unescape.lua" "$TMP_DIR/json_unescape.lua"
 cp "$REPO_DIR/router/cleanup.sh" "$TMP_DIR/cleanup.sh"
 
 # sms-reader needs to run ON the router (ARM), so this always cross-builds
@@ -225,7 +226,7 @@ fi
 SCP_FILES=(
   "$TMP_DIR"/notify.conf "$TMP_DIR"/notify_common.sh "$TMP_DIR"/device_monitor.sh
   "$TMP_DIR"/dhcp_notify.sh "$TMP_DIR"/command_watcher.sh "$TMP_DIR"/sms_notify.sh
-  "$TMP_DIR"/cleanup.sh
+  "$TMP_DIR"/json_unescape.lua "$TMP_DIR"/cleanup.sh
 )
 [ -n "$SMS_READER_BIN" ] && SCP_FILES+=("$SMS_READER_BIN")
 scp_to_router "${SCP_FILES[@]}" "root@$ROUTER_IP:/tmp/" >/dev/null
@@ -248,6 +249,7 @@ ssh "${SSH_OPTS[@]}" -i "$KEY_PATH" "root@$ROUTER_IP" '
   cp /tmp/dhcp_notify.sh /etc/crontabs/patches/dhcp_notify.sh
   cp /tmp/command_watcher.sh /etc/crontabs/patches/command_watcher.sh
   cp /tmp/sms_notify.sh /etc/crontabs/patches/sms_notify.sh
+  cp /tmp/json_unescape.lua /etc/crontabs/patches/json_unescape.lua
   [ -f /tmp/sms-reader ] && cp /tmp/sms-reader /etc/crontabs/patches/sms-reader
   rm -f /etc/crontabs/patches/ntfy_command_watcher.sh
   chmod +x /etc/crontabs/patches/notify_common.sh /etc/crontabs/patches/device_monitor.sh /etc/crontabs/patches/dhcp_notify.sh /etc/crontabs/patches/command_watcher.sh /etc/crontabs/patches/sms_notify.sh

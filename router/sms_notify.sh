@@ -23,6 +23,7 @@ DIR=/etc/crontabs/patches
 BIN="$DIR/sms-reader"
 DB=/data/etc/mobile/xqSMS.db
 STATE="$DIR/sms_last_id.txt"
+REPLY_MAP="$DIR/sms_reply_map.txt"
 PIDFILE=/tmp/sms_notify.pid
 POLL_SECONDS=4
 
@@ -60,6 +61,17 @@ check_once() {
         content_clean=$(unescape "$content")
         if notify "SMS from ${phone_clean:-unknown}" "envelope" "$content_clean"; then
             echo "$id" >"$STATE"
+            # Remember which Telegram message this SMS became, so
+            # command_watcher.sh can tell a reply to it apart from an
+            # ordinary command and send it back to this same number - see
+            # its send_sms_reply(). Only meaningful for a real numeric
+            # sender (an alphanumeric SMSC alias like "Telekom" can't
+            # receive an SMS back) and only on Telegram (ntfy has no
+            # reply-to-a-specific-message of its own to hook into).
+            if [ "$NOTIFY_BACKEND" = "telegram" ] && [ -n "$NOTIFY_LAST_MSGID" ] && [ -n "$phone_clean" ]; then
+                echo "$NOTIFY_LAST_MSGID $phone_clean" >>"$REPLY_MAP"
+                tail -n 200 "$REPLY_MAP" >"$REPLY_MAP.tmp" 2>/dev/null && mv "$REPLY_MAP.tmp" "$REPLY_MAP"
+            fi
         else
             # Delivery failed (network blip, backend hiccup, ...) - stop
             # here without advancing STATE, so this same message is

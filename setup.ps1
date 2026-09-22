@@ -223,6 +223,7 @@ Write-UnixScript (Join-Path $RepoDir 'router\device_monitor.sh') (Join-Path $tmp
 Write-UnixScript (Join-Path $RepoDir 'router\dhcp_notify.sh') (Join-Path $tmpDir 'dhcp_notify.sh') $null
 Write-UnixScript (Join-Path $RepoDir 'router\command_watcher.sh') (Join-Path $tmpDir 'command_watcher.sh') $null
 Write-UnixScript (Join-Path $RepoDir 'router\sms_notify.sh') (Join-Path $tmpDir 'sms_notify.sh') $null
+Write-UnixScript (Join-Path $RepoDir 'router\json_unescape.lua') (Join-Path $tmpDir 'json_unescape.lua') $null
 Write-UnixScript (Join-Path $RepoDir 'router\cleanup.sh') (Join-Path $tmpDir 'cleanup.sh') $null
 
 # sms-reader needs to run ON the router (ARM), so this always cross-builds
@@ -274,6 +275,7 @@ cp /tmp/device_monitor.sh /etc/crontabs/patches/device_monitor.sh
 cp /tmp/dhcp_notify.sh /etc/crontabs/patches/dhcp_notify.sh
 cp /tmp/command_watcher.sh /etc/crontabs/patches/command_watcher.sh
 cp /tmp/sms_notify.sh /etc/crontabs/patches/sms_notify.sh
+cp /tmp/json_unescape.lua /etc/crontabs/patches/json_unescape.lua
 [ -f /tmp/sms-reader ] && cp /tmp/sms-reader /etc/crontabs/patches/sms-reader
 rm -f /etc/crontabs/patches/ntfy_command_watcher.sh
 chmod +x /etc/crontabs/patches/notify_common.sh /etc/crontabs/patches/device_monitor.sh /etc/crontabs/patches/dhcp_notify.sh /etc/crontabs/patches/command_watcher.sh /etc/crontabs/patches/sms_notify.sh
@@ -301,7 +303,7 @@ $installCronScript = $installCronScript -replace "`r`n", "`n"
 $filesToCopy = @(
     (Join-Path $tmpDir 'notify.conf'), (Join-Path $tmpDir 'notify_common.sh'), (Join-Path $tmpDir 'device_monitor.sh'),
     (Join-Path $tmpDir 'dhcp_notify.sh'), (Join-Path $tmpDir 'command_watcher.sh'), (Join-Path $tmpDir 'sms_notify.sh'),
-    (Join-Path $tmpDir 'cleanup.sh'), (Join-Path $tmpDir 'install_cron.sh')
+    (Join-Path $tmpDir 'json_unescape.lua'), (Join-Path $tmpDir 'cleanup.sh'), (Join-Path $tmpDir 'install_cron.sh')
 )
 if ($smsReaderBin) { $filesToCopy += $smsReaderBin }
 Copy-ToRouter @filesToCopy "root@${RouterIp}:/tmp/" | Out-Null

@@ -18,6 +18,10 @@
 #                             it requires a full radio reload on this
 #                             platform, there's no way around that.
 #   "all clear"             — removes the allow-list, back to normal.
+#   (reply, on Telegram)    — replying directly to a forwarded "SMS from
+#                             X" message sends your reply text back to X
+#                             as a real SMS, via the modem's own ubus
+#                             send method. See send_sms_reply().
 #
 # Modes:
 #   --daemon   long-lived listener: Telegram long polling (getUpdates with a
@@ -37,6 +41,7 @@
 DIR=/etc/crontabs/patches
 WHITELIST="$DIR/known_macs.txt"
 LAST_SEEN="$DIR/last_seen.txt"
+REPLY_MAP="$DIR/sms_reply_map.txt"
 PIDFILE=/tmp/command_watcher.pid
 
 # shellcheck disable=SC1091
@@ -111,6 +116,51 @@ trust_mac() {
     notify "Trusted" "white_check_mark" "$mac - $note"
 }
 
+# JSON-string-escapes arbitrary text for embedding in a ubus call's inline
+# JSON argument (there's no jq or similar on this router to build it
+# properly). Backslash and double-quote first (order matters), then real
+# newlines - a Telegram reply can be multi-line - collapsed via the
+# classic `:a;N;$!ba` slurp-the-whole-input trick so a multi-line sed
+# substitution can see across line boundaries at all.
+json_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' -e 's/\r/\\r/g' -e ':a' -e 'N' -e '$!ba' -e 's/\n/\\n/g'
+}
+
+# Reverses Telegram's own JSON string escaping in the text sed pulls out
+# of getUpdates - the sed capture there returns the escaped form verbatim,
+# and the Bot API escapes every non-ASCII character as \uXXXX (confirmed
+# live: a Cyrillic reply arrived as literal "ПР..."), which a
+# sed one-liner can't turn back into real UTF-8 bytes. json_unescape.lua
+# does it properly (including \uXXXX surrogate pairs, for emoji outside
+# the Basic Multilingual Plane) using this router's own stock /usr/bin/lua
+# - no new dependency, the firmware already relies on it for SMS handling.
+json_unescape() {
+    printf '%s' "$1" | lua "$DIR/json_unescape.lua"
+}
+
+# Sends $2 as a real SMS to $1, via the stock firmware's own send path
+# (ubus object "mobile", method "sms" - confirmed live: this is a native,
+# documented mechanism, not an AT-command hack; see /usr/sbin/mobile's
+# own "sms method send." debug string). Reuses the SIM's own SMSC number
+# rather than hardcoding one, since it's carrier-specific.
+send_sms_reply() {
+    phone="$1"
+    text="$2"
+    # -S: compact, single-line JSON - without it ubus pretty-prints across
+    # several lines with a space after each colon ("code": 0), which the
+    # sed extraction below doesn't expect (confirmed live: this silently
+    # produced an empty $code every time, always taking the failure path
+    # even on a send that had actually gone through).
+    smsc=$(ubus -S call mobile sms '{"method":"get_smsc"}' 2>/dev/null | sed -n 's/.*"smsc":"\([^"]*\)".*/\1/p')
+    resp=$(ubus -S call mobile sms "{\"method\":\"send\",\"number\":\"$phone\",\"smsc\":\"$smsc\",\"content\":\"$(json_escape "$text")\"}" 2>&1)
+    code=$(echo "$resp" | sed -n 's/.*"code":\(-\{0,1\}[0-9]*\).*/\1/p')
+    if [ "$code" = "0" ]; then
+        notify "SMS sent" "envelope" "To $phone: $text"
+    else
+        notify "SMS send failed" "warning" "To $phone (code ${code:-?}): $text"
+    fi
+}
+
 apply_macfilter() {
     mode="$1"  # allow | disable
     for idx in 0 1; do
@@ -134,6 +184,20 @@ apply_macfilter() {
 # backend delivered it.
 handle_message() {
     msg="$1"
+    reply_to_id="$2"
+
+    # A reply to one of sms_notify.sh's "SMS from X" messages is free text
+    # meant for that phone number, not a command for this bot - route it
+    # to send_sms_reply() and skip the trust/block matching below entirely
+    # (a reply like "ok, I'll call you back" would otherwise never match
+    # anything, but there's no reason to even try).
+    if [ -n "$reply_to_id" ]; then
+        phone=$(awk -v id="$reply_to_id" '$1==id{p=$2} END{if(p)print p}' "$REPLY_MAP" 2>/dev/null)
+        if [ -n "$phone" ]; then
+            send_sms_reply "$phone" "$msg"
+            return
+        fi
+    fi
 
     if echo "$msg" | grep -qi 'red[[:space:]]*alert'; then
         apply_macfilter allow
@@ -296,6 +360,8 @@ poll_telegram() {
 
             chat_id=$(echo "$line" | sed -n 's/.*"chat":{"id":\(-\{0,1\}[0-9]*\).*/\1/p')
             msg=$(echo "$line" | sed -n 's/.*"text":"\([^"]*\)".*/\1/p')
+            [ -n "$msg" ] && msg=$(json_unescape "$msg")
+            reply_to_id=$(echo "$line" | sed -n 's/.*"reply_to_message":{"message_id":\([0-9]*\).*/\1/p')
 
             echo "$update_id" >> "$DIR/.telegram_last_update_id"
 
@@ -305,7 +371,7 @@ poll_telegram() {
             # this was set up for - anyone else who somehow messages the
             # bot is silently ignored.
             if [ -n "$msg" ] && [ "$chat_id" = "$TELEGRAM_CHAT_ID" ]; then
-                handle_message "$msg"
+                handle_message "$msg" "$reply_to_id"
             fi
         done
 
