@@ -957,6 +957,7 @@ type notifyConfig struct {
 	NtfyTopic        string `json:"ntfy_topic"`
 	TelegramBotToken string `json:"telegram_bot_token"`
 	TelegramChatID   string `json:"telegram_chat_id"`
+	SmsForward       bool   `json:"sms_forward"`
 }
 
 // getNotifyConfig reads the router's live notify.conf - the single source
@@ -977,11 +978,17 @@ func getNotifyConfig() notifyConfig {
 	if backend == "" {
 		backend = "ntfy"
 	}
+	// Defaults to on: sms_notify.sh only exists to forward SMS, so an
+	// installed-but-silently-doing-nothing daemon would be a more
+	// surprising default than the reverse. The GUI checkbox is there for
+	// anyone who'd rather it stayed off.
+	smsForward := pick("SMS_FORWARD", "1") != "0"
 	return notifyConfig{
 		Backend:          backend,
 		NtfyTopic:        pick("NTFY_TOPIC", ntfyTopicEnv),
 		TelegramBotToken: pick("TELEGRAM_BOT_TOKEN", telegramTokenEnv),
 		TelegramChatID:   pick("TELEGRAM_CHAT_ID", telegramChatEnv),
+		SmsForward:       smsForward,
 	}
 }
 
@@ -989,11 +996,15 @@ func getNotifyConfig() notifyConfig {
 // device_monitor.sh and command_watcher.sh read it fresh on every cron
 // run, so nothing else needs restarting for a backend switch to take
 // effect.
-func setNotifyConfig(backend string, telegramBotToken, telegramChatID *string) (notifyConfig, error) {
+func setNotifyConfig(backend string, telegramBotToken, telegramChatID *string, smsForward *bool) (notifyConfig, error) {
 	if backend != "ntfy" && backend != "telegram" {
 		return notifyConfig{}, routerErrf(`Unknown notification backend: %q (expected "ntfy" or "telegram")`, backend)
 	}
 	current := getNotifyConfig()
+	forward := current.SmsForward
+	if smsForward != nil {
+		forward = *smsForward
+	}
 	tok := current.TelegramBotToken
 	if telegramBotToken != nil {
 		tok = *telegramBotToken
@@ -1012,8 +1023,12 @@ func setNotifyConfig(backend string, telegramBotToken, telegramChatID *string) (
 	sendWelcome := backend != current.Backend ||
 		(backend == "telegram" && (tok != current.TelegramBotToken || chat != current.TelegramChatID))
 
-	content := fmt.Sprintf("NOTIFY_BACKEND=%s\nNTFY_TOPIC=%s\nTELEGRAM_BOT_TOKEN=%s\nTELEGRAM_CHAT_ID=%s\n",
-		backend, current.NtfyTopic, tok, chat)
+	forwardVal := "0"
+	if forward {
+		forwardVal = "1"
+	}
+	content := fmt.Sprintf("NOTIFY_BACKEND=%s\nNTFY_TOPIC=%s\nTELEGRAM_BOT_TOKEN=%s\nTELEGRAM_CHAT_ID=%s\nSMS_FORWARD=%s\n",
+		backend, current.NtfyTopic, tok, chat, forwardVal)
 	if _, err := run("mkdir -p "+devmonDir, 0); err != nil {
 		return notifyConfig{}, err
 	}

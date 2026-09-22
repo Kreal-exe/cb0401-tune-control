@@ -7,6 +7,8 @@ gui/.env
 gui/cb0401-tune-control
 gui/cb0401-tune-control.exe
 gui/dist/
+router/sms-reader/dist/
+router/sms-reader-arm
 
 # Local backups you may have made of your router
 backups/

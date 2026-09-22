@@ -361,13 +361,21 @@ case "$1" in
         sh "$0" --ensure
         ;;
     --ensure)
-        daemon_pid >/dev/null && exit 0
-        # Detached (own session if setsid exists) so it outlives this cron job.
-        if command -v setsid >/dev/null 2>&1; then
-            setsid sh "$0" --daemon >/dev/null 2>&1 &
-        else
-            sh "$0" --daemon >/dev/null 2>&1 &
-        fi
+        # flock makes the check-then-launch atomic: the cron watchdog and a
+        # just-finished --restart (or two overlapping cron ticks) can both
+        # reach this within the same second, and without a lock both would
+        # see "not running" and each start their own daemon - confirmed
+        # live, this really happens, not just a theoretical race.
+        (
+            flock -n 9 || exit 0
+            daemon_pid >/dev/null && exit 0
+            # Detached (own session if setsid exists) so it outlives this cron job.
+            if command -v setsid >/dev/null 2>&1; then
+                setsid sh "$0" --daemon >/dev/null 2>&1 &
+            else
+                sh "$0" --daemon >/dev/null 2>&1 &
+            fi
+        ) 9>/tmp/command_watcher.lock
         ;;
     *)
         # One-shot poll (manual use). If the daemon is running it already

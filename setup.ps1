@@ -222,7 +222,35 @@ Write-UnixScript (Join-Path $RepoDir 'router\notify_common.sh') (Join-Path $tmpD
 Write-UnixScript (Join-Path $RepoDir 'router\device_monitor.sh') (Join-Path $tmpDir 'device_monitor.sh') $null
 Write-UnixScript (Join-Path $RepoDir 'router\dhcp_notify.sh') (Join-Path $tmpDir 'dhcp_notify.sh') $null
 Write-UnixScript (Join-Path $RepoDir 'router\command_watcher.sh') (Join-Path $tmpDir 'command_watcher.sh') $null
+Write-UnixScript (Join-Path $RepoDir 'router\sms_notify.sh') (Join-Path $tmpDir 'sms_notify.sh') $null
 Write-UnixScript (Join-Path $RepoDir 'router\cleanup.sh') (Join-Path $tmpDir 'cleanup.sh') $null
+
+# sms-reader needs to run ON the router (ARM), so this always cross-builds
+# it fresh when Go is available - CGO_ENABLED=0 makes it a static,
+# syscall-only binary, so no ARM cross-compiler toolchain is needed, just
+# the same Go installation setup.ps1 already needs to build the GUI. If Go
+# isn't installed, fall back to a prebuilt one (see
+# router\sms-reader\build.sh) if someone's dropped one in; otherwise skip
+# SMS forwarding entirely rather than fail the rest of setup over it.
+$smsReaderBin = $null
+if (Get-Command go -ErrorAction SilentlyContinue) {
+    $smsReaderOut = Join-Path $tmpDir 'sms-reader'
+    Push-Location (Join-Path $RepoDir 'router\sms-reader')
+    $env:CGO_ENABLED = '0'; $env:GOOS = 'linux'; $env:GOARCH = 'arm'; $env:GOARM = '7'
+    & go build -ldflags="-s -w" -o $smsReaderOut .
+    $goExit = $LASTEXITCODE
+    Remove-Item Env:\CGO_ENABLED, Env:\GOOS, Env:\GOARCH, Env:\GOARM
+    Pop-Location
+    if ($goExit -eq 0) { $smsReaderBin = $smsReaderOut }
+} elseif (Test-Path (Join-Path $RepoDir 'router\sms-reader\dist\sms-reader-arm')) {
+    $smsReaderBin = Join-Path $tmpDir 'sms-reader'
+    Copy-Item (Join-Path $RepoDir 'router\sms-reader\dist\sms-reader-arm') $smsReaderBin
+}
+if (-not $smsReaderBin) {
+    Write-Host "NOTE: couldn't build or find sms-reader (needs Go, or a prebuilt"
+    Write-Host "      router\sms-reader\dist\sms-reader-arm - see router\sms-reader\build.sh)."
+    Write-Host '      Skipping SMS forwarding; everything else is unaffected.'
+}
 
 # Written to a script file and run with `sh`, rather than passed inline as an
 # ssh argument - Windows PowerShell's native-command argument marshalling
@@ -245,31 +273,44 @@ cp /tmp/notify_common.sh /etc/crontabs/patches/notify_common.sh
 cp /tmp/device_monitor.sh /etc/crontabs/patches/device_monitor.sh
 cp /tmp/dhcp_notify.sh /etc/crontabs/patches/dhcp_notify.sh
 cp /tmp/command_watcher.sh /etc/crontabs/patches/command_watcher.sh
+cp /tmp/sms_notify.sh /etc/crontabs/patches/sms_notify.sh
+[ -f /tmp/sms-reader ] && cp /tmp/sms-reader /etc/crontabs/patches/sms-reader
 rm -f /etc/crontabs/patches/ntfy_command_watcher.sh
-chmod +x /etc/crontabs/patches/notify_common.sh /etc/crontabs/patches/device_monitor.sh /etc/crontabs/patches/dhcp_notify.sh /etc/crontabs/patches/command_watcher.sh
+chmod +x /etc/crontabs/patches/notify_common.sh /etc/crontabs/patches/device_monitor.sh /etc/crontabs/patches/dhcp_notify.sh /etc/crontabs/patches/command_watcher.sh /etc/crontabs/patches/sms_notify.sh
+[ -f /etc/crontabs/patches/sms-reader ] && chmod +x /etc/crontabs/patches/sms-reader
 touch /etc/crontabs/patches/known_macs.txt
 sh /etc/crontabs/patches/device_monitor.sh
 uci set dhcp.@dnsmasq[0].dhcpscript="/etc/crontabs/patches/dhcp_notify.sh"
 uci commit dhcp
 /etc/init.d/dnsmasq reload >/dev/null 2>&1 || /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-sed -i "/ntfy_command_watcher\.sh/d; /\/device_monitor\.sh/d; /command_watcher\.sh/d" /etc/crontabs/root 2>/dev/null || true
+sed -i "/ntfy_command_watcher\.sh/d; /\/device_monitor\.sh/d; /command_watcher\.sh/d; /sms_notify\.sh/d" /etc/crontabs/root 2>/dev/null || true
 echo "* * * * * sh /etc/crontabs/patches/command_watcher.sh --ensure >/dev/null 2>&1" >> /etc/crontabs/root
+if [ -f /etc/crontabs/patches/sms-reader ]; then
+    echo "* * * * * sh /etc/crontabs/patches/sms_notify.sh --ensure >/dev/null 2>&1" >> /etc/crontabs/root
+fi
 /etc/init.d/cron restart >/dev/null 2>&1 || true
 sh /etc/crontabs/patches/command_watcher.sh --restart
+if [ -f /etc/crontabs/patches/sms-reader ]; then
+    sh /etc/crontabs/patches/sms_notify.sh
+    sh /etc/crontabs/patches/sms_notify.sh --restart
+fi
 '@
 $installCronScript = $installCronScript -replace "`r`n", "`n"
 [System.IO.File]::WriteAllText((Join-Path $tmpDir 'install_cron.sh'), $installCronScript)
 
-Copy-ToRouter `
-    (Join-Path $tmpDir 'notify.conf') (Join-Path $tmpDir 'notify_common.sh') (Join-Path $tmpDir 'device_monitor.sh') `
-    (Join-Path $tmpDir 'dhcp_notify.sh') (Join-Path $tmpDir 'command_watcher.sh') (Join-Path $tmpDir 'cleanup.sh') (Join-Path $tmpDir 'install_cron.sh') `
-    "root@${RouterIp}:/tmp/" | Out-Null
+$filesToCopy = @(
+    (Join-Path $tmpDir 'notify.conf'), (Join-Path $tmpDir 'notify_common.sh'), (Join-Path $tmpDir 'device_monitor.sh'),
+    (Join-Path $tmpDir 'dhcp_notify.sh'), (Join-Path $tmpDir 'command_watcher.sh'), (Join-Path $tmpDir 'sms_notify.sh'),
+    (Join-Path $tmpDir 'cleanup.sh'), (Join-Path $tmpDir 'install_cron.sh')
+)
+if ($smsReaderBin) { $filesToCopy += $smsReaderBin }
+Copy-ToRouter @filesToCopy "root@${RouterIp}:/tmp/" | Out-Null
 $scpExit = $LASTEXITCODE
 Remove-Item -Recurse -Force $tmpDir
 if ($scpExit -ne 0) { Die 'Could not copy the router scripts over SSH (scp failed).' }
 
 & ssh @SshOpts -i $KeyPath "root@$RouterIp" 'sh /tmp/install_cron.sh'
-Write-Host 'New-device alerts wired to dnsmasq (instant, no polling); command listener (long polling) started on the router.'
+Write-Host 'New-device alerts wired to dnsmasq (instant, no polling); command listener and SMS forwarder started on the router.'
 
 # --- 5. Cleanup --------------------------------------------------------
 

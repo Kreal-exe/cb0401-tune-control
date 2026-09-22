@@ -235,6 +235,9 @@
       <div class="field-label">Chat ID</div>
       <input type="text" class="full" id="telegramChatId" placeholder="e.g. 123456789" oninput="markDeviceMonitorDirty()">
     </div>
+    <div class="row" style="margin-top:8px;">
+      <label><input type="checkbox" id="smsForward" onchange="markDeviceMonitorDirty()"> Forward incoming SMS here too</label>
+    </div>
     <div class="actions">
       <button onclick="saveNotifyConfig()">Save notification settings</button>
     </div>
@@ -585,6 +588,7 @@ async function saveNotifyConfig() {
     body.telegram_bot_token = document.getElementById('telegramBotToken').value;
     body.telegram_chat_id = document.getElementById('telegramChatId').value;
   }
+  body.sms_forward = document.getElementById('smsForward').checked;
   const el = document.getElementById('notifyConfigStatus');
   el.textContent = 'saving...'; el.className = 'status-line';
   try {
@@ -615,6 +619,7 @@ async function loadDeviceMonitor(force) {
     document.getElementById('ntfyTopicLine').textContent = notify.ntfy_topic ? ('https://ntfy.sh/' + notify.ntfy_topic) : '—';
     document.getElementById('telegramBotToken').value = notify.telegram_bot_token || '';
     document.getElementById('telegramChatId').value = notify.telegram_chat_id || '';
+    document.getElementById('smsForward').checked = notify.sms_forward !== false;
     onNotifyBackendChange();
 
     const whitelist = new Set(data.whitelist);

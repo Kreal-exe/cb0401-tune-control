@@ -38,7 +38,7 @@ A single-page dashboard covering:
 - **Cellular** — Standalone (SA) 5G toggle, region-based band presets (Europe/America/Asia, built from GSMA/3GPP allocation tables and, for Europe, this project's own factory-default bands), and raw band chips for full manual control via `AT+QNWPREFCFG`.
 - **Wi-Fi** — 2.4GHz and 5GHz channel/width, live client count, read-only TX power display (see [Known hardware limitations](#known-hardware-limitations) for why it's read-only).
 - **SSH** — one-click-copy commands for both key-based and password-based access, pre-filled with the `ssh-rsa` compatibility flags this router's old dropbear needs to work with a modern OpenSSH client, plus a field to change the router's root password (see [Changing the root password](#changing-the-root-password)).
-- **Device monitor** — every device currently on your network, with a checkbox whitelist; unlisted devices trigger a push notification. Also where you switch between ntfy.sh and Telegram, or update your Telegram bot token/chat ID, at any time.
+- **Device monitor** — every device currently on your network, with a checkbox whitelist; unlisted devices trigger a push notification. Also where you switch between ntfy.sh and Telegram, update your Telegram bot token/chat ID, or turn incoming-SMS forwarding on/off, at any time — see [Incoming SMS](#incoming-sms).
 - **Advanced** — a raw SSH command box and a full `uci show` config dump, for anything the rest of the UI doesn't cover.
 
 ![Device monitor card](docs/screenshot-2.png)
@@ -67,7 +67,17 @@ Either way, the credential (ntfy topic, or Telegram bot token + chat ID) is stor
 
 The first time you set a backend up (or whenever you switch it, or change the Telegram token/chat ID), you'll get a one-time welcome message through it listing the commands above — so you don't have to come back to this README to remember them once an actual alert shows up.
 
-`device_monitor.sh` is still on the router alongside `dhcp_notify.sh`, but only runs once during setup — it scans whatever's already connected at that point so those devices are seeded as "already seen" instead of all alerting at once the moment the dnsmasq hook goes live. After that, it's unused unless you re-run setup.
+`device_monitor.sh` is still on the router alongside `dhcp_notify.sh`, but only runs once during setup — it scans whatever's already connected at that point so those devices are seeded as "already seen" instead of all alerting at once the moment the dnsmasq hook goes live. After that, it's unused unless you re-run setup (or run it manually over SSH, as a re-scan).
+
+"Already seen" isn't forever, though: a device you haven't whitelisted (or blocked) gets re-alerted if it reconnects more than 4 hours after its last alert. The 4-hour window exists specifically so a router reboot - which makes every already-connected device request a fresh lease at once, since the lease file itself lives on `/tmp` and doesn't survive one - doesn't look like all of them just showed up for the first time; it isn't meant to mean "you've decided about this device, don't ask again" the way whitelisting or blocking it does.
+
+## Incoming SMS
+
+If the number this SIM is on ever gets a text (a carrier notice, a 2FA code, anything), it's forwarded to your ntfy/Telegram backend too — checked via the "Forward incoming SMS here too" checkbox next to the notification backend on the Device monitor card (on by default once you've set up a backend).
+
+The stock firmware's own SMS handling (`/usr/sbin/mobile`) is compiled/encrypted Lua this project can't hook into or extend, so there's no equivalent of the dnsmasq hook above - `sms_notify.sh` polls instead, but cheaply: every 4 seconds it runs [`sms-reader`](router/sms-reader/) (a small, purpose-built, dependency-free Go binary this project ships prebuilt for the router) against `/data/etc/mobile/xqSMS.db`, the small SQLite file that daemon already maintains. There's no `sqlite3` CLI on this router and installing one would mean either a multi-MB dependency or a foreign binary's libc against this firmware's userland - so `sms-reader` implements just enough of the SQLite file format to read new rows of that one known table, in a static binary built with `CGO_ENABLED=0` (no libc dependency of its own either). See its own doc comment for the exact scope and what it deliberately doesn't try to handle (a table that's grown past a single b-tree page, essentially - not a realistic size for a personal SMS inbox).
+
+Like the other listeners, `sms_notify.sh` runs under the same `--daemon`/`--ensure`/`--stop` convention with a once-a-minute cron watchdog, and a one-shot run at setup time seeds "already seen" from whatever's already in the database so it doesn't forward old messages the moment it goes live.
 
 ## What gets cleaned up
 
@@ -152,6 +162,7 @@ Both modify firmware/modem configuration and aren't covered by the same idempote
 - Opening SSH relies on a default password derived from your router's serial number (see [How SSH access is opened](#how-ssh-access-is-opened)) — this is stock Xiaomi firmware behavior, not something this project introduces, but it does mean anyone on your LAN who can reach the router's web UI before you run setup could derive that password too. Run setup promptly after unboxing/resetting the device.
 - The GUI has no authentication of its own — it relies entirely on binding to `127.0.0.1`. Do not expose port 5757 to your network.
 - `gui/router_key`, `gui/router_key.pub`, and `gui/.env` (which holds the router's root password, plus your ntfy topic or Telegram bot token) are generated locally by setup and are gitignored — never commit or share them.
+- SMS forwarding (see [Incoming SMS](#incoming-sms)) means anything sent to this SIM - including 2FA/login codes - ends up in your ntfy topic or Telegram chat too. Turn it off from the Device monitor card if that's not something you want going through a third-party push service.
 
 ## License
 

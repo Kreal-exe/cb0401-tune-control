@@ -223,9 +223,10 @@ func handleNotifyConfig(w http.ResponseWriter, r *http.Request) {
 		Backend          string  `json:"backend"`
 		TelegramBotToken *string `json:"telegram_bot_token"`
 		TelegramChatID   *string `json:"telegram_chat_id"`
+		SmsForward       *bool   `json:"sms_forward"`
 	}
 	decodeBody(r, &body)
-	cfg, err := setNotifyConfig(body.Backend, body.TelegramBotToken, body.TelegramChatID)
+	cfg, err := setNotifyConfig(body.Backend, body.TelegramBotToken, body.TelegramChatID, body.SmsForward)
 	if err != nil {
 		errResp(w, err)
 		return

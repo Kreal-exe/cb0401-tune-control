@@ -197,12 +197,38 @@ cp "$REPO_DIR/router/notify_common.sh" "$TMP_DIR/notify_common.sh"
 cp "$REPO_DIR/router/device_monitor.sh" "$TMP_DIR/device_monitor.sh"
 cp "$REPO_DIR/router/dhcp_notify.sh" "$TMP_DIR/dhcp_notify.sh"
 cp "$REPO_DIR/router/command_watcher.sh" "$TMP_DIR/command_watcher.sh"
+cp "$REPO_DIR/router/sms_notify.sh" "$TMP_DIR/sms_notify.sh"
 cp "$REPO_DIR/router/cleanup.sh" "$TMP_DIR/cleanup.sh"
 
-scp_to_router \
-  "$TMP_DIR"/notify.conf "$TMP_DIR"/notify_common.sh "$TMP_DIR"/device_monitor.sh \
-  "$TMP_DIR"/dhcp_notify.sh "$TMP_DIR"/command_watcher.sh "$TMP_DIR"/cleanup.sh \
-  "root@$ROUTER_IP:/tmp/" >/dev/null
+# sms-reader needs to run ON the router (ARM), so this always cross-builds
+# it fresh when Go is available - CGO_ENABLED=0 makes it a static,
+# syscall-only binary, so no ARM cross-compiler toolchain is needed, just
+# the same Go installation setup.sh already needs to build the GUI. If Go
+# isn't installed, fall back to a prebuilt one (see
+# router/sms-reader/build.sh) if someone's dropped one in; otherwise skip
+# SMS forwarding entirely rather than fail the rest of setup over it.
+SMS_READER_BIN=""
+if command -v go >/dev/null 2>&1; then
+  if (cd "$REPO_DIR/router/sms-reader" && CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o "$TMP_DIR/sms-reader" .); then
+    SMS_READER_BIN="$TMP_DIR/sms-reader"
+  fi
+elif [ -x "$REPO_DIR/router/sms-reader/dist/sms-reader-arm" ]; then
+  cp "$REPO_DIR/router/sms-reader/dist/sms-reader-arm" "$TMP_DIR/sms-reader"
+  SMS_READER_BIN="$TMP_DIR/sms-reader"
+fi
+if [ -z "$SMS_READER_BIN" ]; then
+  echo "NOTE: couldn't build or find sms-reader (needs Go, or a prebuilt"
+  echo "      router/sms-reader/dist/sms-reader-arm - see router/sms-reader/build.sh)."
+  echo "      Skipping SMS forwarding; everything else is unaffected."
+fi
+
+SCP_FILES=(
+  "$TMP_DIR"/notify.conf "$TMP_DIR"/notify_common.sh "$TMP_DIR"/device_monitor.sh
+  "$TMP_DIR"/dhcp_notify.sh "$TMP_DIR"/command_watcher.sh "$TMP_DIR"/sms_notify.sh
+  "$TMP_DIR"/cleanup.sh
+)
+[ -n "$SMS_READER_BIN" ] && SCP_FILES+=("$SMS_READER_BIN")
+scp_to_router "${SCP_FILES[@]}" "root@$ROUTER_IP:/tmp/" >/dev/null
 rm -rf "$TMP_DIR"
 
 # New-device alerts fire the instant dnsmasq grants a lease (dhcp_notify.sh,
@@ -221,19 +247,33 @@ ssh "${SSH_OPTS[@]}" -i "$KEY_PATH" "root@$ROUTER_IP" '
   cp /tmp/device_monitor.sh /etc/crontabs/patches/device_monitor.sh
   cp /tmp/dhcp_notify.sh /etc/crontabs/patches/dhcp_notify.sh
   cp /tmp/command_watcher.sh /etc/crontabs/patches/command_watcher.sh
+  cp /tmp/sms_notify.sh /etc/crontabs/patches/sms_notify.sh
+  [ -f /tmp/sms-reader ] && cp /tmp/sms-reader /etc/crontabs/patches/sms-reader
   rm -f /etc/crontabs/patches/ntfy_command_watcher.sh
-  chmod +x /etc/crontabs/patches/notify_common.sh /etc/crontabs/patches/device_monitor.sh /etc/crontabs/patches/dhcp_notify.sh /etc/crontabs/patches/command_watcher.sh
+  chmod +x /etc/crontabs/patches/notify_common.sh /etc/crontabs/patches/device_monitor.sh /etc/crontabs/patches/dhcp_notify.sh /etc/crontabs/patches/command_watcher.sh /etc/crontabs/patches/sms_notify.sh
+  [ -f /etc/crontabs/patches/sms-reader ] && chmod +x /etc/crontabs/patches/sms-reader
   touch /etc/crontabs/patches/known_macs.txt
   sh /etc/crontabs/patches/device_monitor.sh
   uci set dhcp.@dnsmasq[0].dhcpscript="/etc/crontabs/patches/dhcp_notify.sh"
   uci commit dhcp
   /etc/init.d/dnsmasq reload >/dev/null 2>&1 || /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-  sed -i "/ntfy_command_watcher\.sh/d; /\/device_monitor\.sh/d; /command_watcher\.sh/d" /etc/crontabs/root 2>/dev/null || true
+  sed -i "/ntfy_command_watcher\.sh/d; /\/device_monitor\.sh/d; /command_watcher\.sh/d; /sms_notify\.sh/d" /etc/crontabs/root 2>/dev/null || true
   echo "* * * * * sh /etc/crontabs/patches/command_watcher.sh --ensure >/dev/null 2>&1" >> /etc/crontabs/root
+  if [ -f /etc/crontabs/patches/sms-reader ]; then
+    echo "* * * * * sh /etc/crontabs/patches/sms_notify.sh --ensure >/dev/null 2>&1" >> /etc/crontabs/root
+  fi
   /etc/init.d/cron restart >/dev/null 2>&1 || true
-sh /etc/crontabs/patches/command_watcher.sh --restart
+  sh /etc/crontabs/patches/command_watcher.sh --restart
+  if [ -f /etc/crontabs/patches/sms-reader ]; then
+    # Seed the "already seen" SMS id from whatever is in the database
+    # right now, so setup does not forward old messages the moment the
+    # daemon starts (mirrors device_monitor.sh'"'"'s baseline scan above) -
+    # then start the daemon itself.
+    sh /etc/crontabs/patches/sms_notify.sh
+    sh /etc/crontabs/patches/sms_notify.sh --restart
+  fi
 '
-echo "New-device alerts wired to dnsmasq (instant, no polling); command listener (long polling) started on the router."
+echo "New-device alerts wired to dnsmasq (instant, no polling); command listener and SMS forwarder started on the router."
 
 # --- 5. Cleanup --------------------------------------------------------
 
