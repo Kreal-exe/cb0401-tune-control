@@ -58,8 +58,15 @@ check_once() {
         [ -z "$id" ] && continue
         phone_clean=$(unescape "$phone")
         content_clean=$(unescape "$content")
-        notify "SMS from ${phone_clean:-unknown}" "envelope" "$content_clean"
-        echo "$id" >"$STATE"
+        if notify "SMS from ${phone_clean:-unknown}" "envelope" "$content_clean"; then
+            echo "$id" >"$STATE"
+        else
+            # Delivery failed (network blip, backend hiccup, ...) - stop
+            # here without advancing STATE, so this same message is
+            # retried from scratch next poll instead of being silently
+            # skipped forever.
+            break
+        fi
     done
 }
 

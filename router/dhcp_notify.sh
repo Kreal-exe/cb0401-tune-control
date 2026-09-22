@@ -58,7 +58,11 @@ host_short="$4"
 [ -z "$host_short" ] || [ "$host_short" = "*" ] && host_short="unnamed"
 
 notify "New device" "warning" "$mac_u | $3 | $host_short
-Reply: trust / block / red alert"
+Reply: trust / block / red alert" || return 0
+# Only mark this MAC as notified once the alert actually got delivered - a
+# transient failure here (network blip, backend hiccup) should let it
+# retry on the device's next DHCP event instead of being silently and
+# permanently suppressed.
 
 grep -v "^$mac_u " "$NOTIFIED" >"$NOTIFIED.tmp" 2>/dev/null
 mv "$NOTIFIED.tmp" "$NOTIFIED" 2>/dev/null || : >"$NOTIFIED"
