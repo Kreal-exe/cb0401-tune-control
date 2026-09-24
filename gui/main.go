@@ -61,10 +61,14 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func handleSA(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Enabled bool `json:"enabled"`
+		Mode *int `json:"mode"`
 	}
 	decodeBody(r, &body)
-	cfg, err := setSaEnabled(body.Enabled)
+	if body.Mode == nil {
+		errResp(w, fmt.Errorf("missing mode (0=SA+NSA, 1=SA off, 2=force SA, 3=5G off)"))
+		return
+	}
+	cfg, err := setNr5gMode(*body.Mode)
 	if err != nil {
 		errResp(w, err)
 		return

@@ -290,12 +290,16 @@ func getModemConfig() (map[string]string, error) {
 	return cfg, nil
 }
 
-func setSaEnabled(enabled bool) (map[string]string, error) {
-	val := "1"
-	if enabled {
-		val = "0"
+// setNr5gMode sets AT+QNWPREFCFG="nr5g_disable_mode":
+//   0 = SA+NSA both enabled (modem picks NSA when available)
+//   1 = SA disabled (NSA/LTE only)
+//   2 = NSA disabled (force SA only)
+//   3 = all NR5G disabled (LTE only)
+func setNr5gMode(mode int) (map[string]string, error) {
+	if mode < 0 || mode > 3 {
+		return nil, fmt.Errorf("invalid nr5g_disable_mode %d (0-3)", mode)
 	}
-	if _, err := atQuery([]string{fmt.Sprintf(`AT+QNWPREFCFG="nr5g_disable_mode",%s`, val)}, 1500*time.Millisecond); err != nil {
+	if _, err := atQuery([]string{fmt.Sprintf(`AT+QNWPREFCFG="nr5g_disable_mode",%d`, mode)}, 1500*time.Millisecond); err != nil {
 		return nil, err
 	}
 	return getModemConfig()

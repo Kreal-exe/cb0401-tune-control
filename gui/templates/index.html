@@ -112,13 +112,14 @@
   <div class="card">
     <h2>Cellular network <span id="saBadge" class="badge off">—</span></h2>
     <div class="row">
-      <span class="k">Standalone (SA)</span>
-      <span class="toggle">
-        <span id="saStatusText" class="v">—</span>
-        <label class="switch">
-          <input type="checkbox" id="saToggle" onchange="toggleSA()">
-          <span class="slider"></span>
-        </label>
+      <span class="k">5G mode</span>
+      <span class="v">
+        <select id="saModeSelect" onchange="setSAMode()" style="font-size:13px;padding:3px 6px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);">
+          <option value="0">SA + NSA (auto)</option>
+          <option value="2">Force SA only</option>
+          <option value="1">5G off (LTE only)</option>
+          <option value="3">5G off (LTE only, alt)</option>
+        </select>
       </span>
     </div>
     <div class="field-label" style="margin-top:16px;">Region (applies to all three lists below at once)</div>
@@ -385,15 +386,16 @@ async function loadStatus() {
     const m = data.modem || {};
     const w = data.wifi || {};
 
-    // SA applies immediately on toggle (no separate "save" step), so it's
-    // always safe to sync from the server - unlike the band chips and Wi-Fi
-    // channel/width below, there's no in-progress edit to protect here.
-    const saOn = m.nr5g_disable_mode === '0';
-    document.getElementById('saToggle').checked = saOn;
-    document.getElementById('saStatusText').textContent = saOn ? 'on' : 'off';
+    // 5G mode select syncs immediately from server (no unsaved state to protect).
+    const dm = m.nr5g_disable_mode || '0';
+    const sel = document.getElementById('saModeSelect');
+    sel.value = dm;
+    if (!sel.value) sel.value = '0'; // fallback for unknown values
     const badge = document.getElementById('saBadge');
-    badge.textContent = saOn ? 'SA' : 'NSA/off';
-    badge.className = 'badge ' + (saOn ? 'sa' : 'nsa');
+    const modeLabels = {'0':'SA+NSA','1':'LTE','2':'SA','3':'LTE'};
+    const modeCss    = {'0':'nsa',  '1':'nsa', '2':'sa', '3':'nsa'};
+    badge.textContent = modeLabels[dm] || dm;
+    badge.className = 'badge ' + (modeCss[dm] || 'nsa');
 
     // Skip refreshing the band chips while there's an un-written edit
     // (bandsDirty) - otherwise this runs every 20s and would silently
@@ -442,12 +444,12 @@ async function loadStatus() {
   }
 }
 
-async function toggleSA() {
-  const enabled = document.getElementById('saToggle').checked;
+async function setSAMode() {
+  const mode = parseInt(document.getElementById('saModeSelect').value, 10);
   const el = document.getElementById('bandsStatus');
   el.textContent = 'applying...'; el.className = 'status-line';
   try {
-    await api('/api/sa', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled})});
+    await api('/api/sa', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mode})});
     el.textContent = 'done'; el.className = 'status-line ok';
     loadStatus();
   } catch (e) {
