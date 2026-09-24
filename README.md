@@ -50,13 +50,31 @@ This is the same mechanism [xmir-patcher](https://github.com/openwrt-xiaomi/xmir
 A single-page dashboard covering:
 
 - **System** — real-time CPU%, memory, SoC temperature, uptime, reboot button, a version-spoof button that lifts the stock updater's downgrade block (memory-only, reverts on reboot — see [Firmware downgrade & 5G band unlock](#firmware-downgrade--5g-band-unlock)), plus a 2.4GHz spectrum scan with a channel recommendation (scores every candidate channel by overlap-weighted, signal-weighted interference from every network your router can see, not just exact-channel matches).
-- **Cellular** — Standalone (SA) 5G toggle, region-based band presets (Europe/America/Asia, built from GSMA/3GPP allocation tables and, for Europe, this project's own factory-default bands), and raw band chips for full manual control via `AT+QNWPREFCFG`.
+- **Cellular** — 5G mode selector (`SA+NSA auto` / `Force SA only` / `NSA only` / `LTE only` — see [SA vs NSA](#sa-vs-nsa-5g) for what these actually mean and their real-world limits), region-based band presets (Europe/America/Asia, built from GSMA/3GPP allocation tables and, for Europe, this project's own factory-default bands), and raw band chips for full manual control via `AT+QNWPREFCFG`.
 - **Wi-Fi** — 2.4GHz and 5GHz channel/width, live client count, read-only TX power display (see [Known hardware limitations](#known-hardware-limitations) for why it's read-only).
 - **SSH** — one-click-copy commands for both key-based and password-based access, pre-filled with the `ssh-rsa` compatibility flags this router's old dropbear needs to work with a modern OpenSSH client, plus a field to change the router's root password (see [Changing the root password](#changing-the-root-password)).
 - **Device monitor** — every device currently on your network, with a checkbox whitelist; unlisted devices trigger a push notification. A device with no DHCP hostname also gets a best-effort manufacturer name (from its MAC) and an mDNS-derived name if one answers — see [Identifying nameless devices](#identifying-nameless-devices). Also where you switch between ntfy.sh and Telegram, update your Telegram bot token/chat ID, or turn incoming-SMS forwarding on/off, at any time — see [Incoming SMS](#incoming-sms).
 - **Advanced** — a raw SSH command box and a full `uci show` config dump, for anything the rest of the UI doesn't cover.
 
 ![Device monitor card](docs/screenshot-2.png)
+
+## SA vs NSA 5G
+
+The Cellular card's 5G mode selector writes `AT+QNWPREFCFG="nr5g_disable_mode"` directly on the modem:
+
+| Value | Mode | Effect |
+|---|---|---|
+| `0` | SA + NSA (auto) | Modem attaches to whatever the network offers — in practice, almost always NSA if the network offers both |
+| `1` | NSA only | SA disabled |
+| `2` | Force SA only | NSA disabled — the modem will only attach to a standalone 5G core network |
+| `3` | LTE only | 5G disabled entirely |
+
+**NSA (Non-Standalone) and SA (Standalone) are two different registration types, not two flavors of the same thing:**
+
+- **NSA** anchors on an LTE cell for control-plane signaling and uses 5G NR purely as extra downlink/uplink capacity bolted on top. This is what almost every "5G" icon on a phone actually means today.
+- **SA** is a fully independent 5G registration against a genuine 5G-only core network — no LTE involved at all.
+
+Setting `Force SA only` doesn't manufacture SA coverage that isn't there — if your carrier hasn't deployed a real SA cell at your location, the modem falls all the way back to plain LTE (both NSA and SA unavailable), even if NSA 5G otherwise works fine there. Confirmed by direct `AT+QENG="servingcell"` queries on the project's own test connection (Telekom.de): with mode `0`, a working connection reports `"NR5G-NSA"`; forcing mode `2` on the exact same cell dropped straight to plain `"LTE"`, with zero NR bands active — proof there was no SA cell to fall onto, not a bug in this toolkit. Check your carrier's 5G SA rollout before assuming this mode should give you a 5G icon — NSA is what most "5G" networks actually run today.
 
 `setup.sh`/`setup.ps1` build and launch [`gui/`](gui/) — a single native Go binary, nothing to install to *run* it (only to *build* it, once, if you don't use a prebuilt binary — see [`gui/README.md`](gui/README.md)).
 
@@ -178,7 +196,7 @@ Once setup finishes, the GUI opens automatically at `http://127.0.0.1:5757`.
 Both live as one-click buttons in the GUI itself — no separate script, no xmir-patcher, since they only need the SSH access this toolkit already has:
 
 - **System card → "Spoof version → 0.0.1"** — lifts the stock web updater's downgrade block (Settings > Update > Local update), if you need to flash an older firmware version. Memory-only (a bind-mount), reverts on its own at the next reboot.
-- **Cellular card → "Unlock extra 5G bands + SA"** — installs a permanent hook (adapted from [davidohne/xiaomi_cb0401](https://github.com/davidohne/xiaomi_cb0401)) that unlocks Standalone mode and enables an extra-band list on the cellular modem (n1/n3/n7/n28/n38/n75/n78 by default, or whatever's already configured if you install this after picking your own bands). It reapplies on every `wan_2` reconnect, including after a reboot — and from then on, applying a region preset or manual band selection from the Cellular card keeps that hook in sync, so a reconnect never reverts you back to the installed default.
+- **Cellular card → "Unlock extra 5G bands + SA"** — installs a permanent hook (adapted from [davidohne/xiaomi_cb0401](https://github.com/davidohne/xiaomi_cb0401)) that reapplies your band selection and 5G mode (see [SA vs NSA](#sa-vs-nsa-5g)) on the cellular modem on every `wan_2` reconnect, including after a reboot — the stock firmware doesn't otherwise remember either setting across a reconnect. Seeded from whatever's already configured the first time you install it (n1/n3/n7/n28/n38/n75/n78 and SA+NSA auto by default if nothing's been set yet); from then on, changing bands or the 5G mode from the Cellular card keeps the hook in sync, so a reconnect never reverts you back to a stale value.
 
 Both modify firmware/modem configuration and aren't covered by the same idempotency guarantees as the rest of this toolkit — read the button's confirmation prompt before clicking.
 
