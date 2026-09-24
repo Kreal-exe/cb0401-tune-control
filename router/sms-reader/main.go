@@ -152,6 +152,11 @@ func run(path string, afterID int64) error {
 }
 
 func escapeField(s string) string {
+	// The stock firmware sometimes stores a stray non-UTF-8 byte (seen live:
+	// an alphanumeric sender "HotSpot" saved as "HotSpot\xa1"). Telegram
+	// rejects any request containing invalid UTF-8 outright ("strings must
+	// be encoded in UTF-8"), so one such message would never be deliverable.
+	s = strings.ToValidUTF8(s, "")
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	s = strings.ReplaceAll(s, "\t", "\\t")
 	s = strings.ReplaceAll(s, "\n", "\\n")

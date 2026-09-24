@@ -73,11 +73,22 @@ check_once() {
                 tail -n 200 "$REPLY_MAP" >"$REPLY_MAP.tmp" 2>/dev/null && mv "$REPLY_MAP.tmp" "$REPLY_MAP"
             fi
         else
-            # Delivery failed (network blip, backend hiccup, ...) - stop
-            # here without advancing STATE, so this same message is
-            # retried from scratch next poll instead of being silently
-            # skipped forever.
-            break
+            case "$NOTIFY_LAST_HTTP" in
+            429 | 5?? | 000 | "")
+                # Transient (network blip, rate limit, backend hiccup) -
+                # stop here without advancing STATE, so this same message
+                # is retried next poll instead of being silently skipped.
+                break
+                ;;
+            *)
+                # Permanent (e.g. Telegram 400 rejecting the payload):
+                # retrying can never succeed, and stopping here would block
+                # every later SMS behind this one forever (seen live). Skip
+                # it, and say so in the log.
+                echo "$(date +%s) skipped SMS id=$id: HTTP $NOTIFY_LAST_HTTP" >>/tmp/sms_notify_skipped.log
+                echo "$id" >"$STATE"
+                ;;
+            esac
         fi
     done
 }

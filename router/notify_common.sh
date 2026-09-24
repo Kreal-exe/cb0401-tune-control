@@ -39,11 +39,15 @@ TELEGRAM_CHAT_ID=""
 # reply back to this specific message (e.g. sms_notify.sh, so a Telegram
 # reply can be routed back to the phone number that sent the original SMS)
 # read it right after calling notify(). Empty for ntfy (no such concept)
-# or if the send failed.
+# or if the send failed. NOTIFY_LAST_HTTP always holds the HTTP status, so a
+# caller can tell a transient failure (timeout: empty/000, 5xx, 429 - worth
+# retrying) from a permanent one (other 4xx, e.g. Telegram rejecting the
+# payload itself - retrying can never succeed).
 notify() {
     title="$1"
     body="$3"
     NOTIFY_LAST_MSGID=""
+    NOTIFY_LAST_HTTP=""
     case "$NOTIFY_BACKEND" in
         telegram)
             resp=$(curl -s -m 10 -w '\nHTTPSTATUS:%{http_code}' -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
@@ -57,5 +61,6 @@ ${body}")
             code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -H "Title: $title" -H "Tags: $2" -d "$body" "https://ntfy.sh/$NTFY_TOPIC")
             ;;
     esac
+    NOTIFY_LAST_HTTP="$code"
     [ "$code" = "200" ]
 }
