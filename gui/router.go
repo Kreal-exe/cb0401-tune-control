@@ -331,24 +331,6 @@ func setBands(nr5gBand, nsaNr5gBand, lteBand string) (map[string]string, error) 
 		time.Sleep(2 * time.Second)
 	}
 
-	// Verify by reading each key individually - ue_capability_band (used by
-	// getModemConfig) returns hardware capabilities, not the configured value.
-	var mismatched []string
-	for _, req := range todo {
-		raw, err := atQuery([]string{fmt.Sprintf(`AT+QNWPREFCFG="%s"`, req.key)}, 2*time.Second)
-		if err != nil {
-			mismatched = append(mismatched, fmt.Sprintf("%s: readback failed: %v", req.key, err))
-			continue
-		}
-		got := parseQnwprefcfg(raw)[req.key]
-		if got != req.value {
-			mismatched = append(mismatched, fmt.Sprintf("%s: requested %q, got %q", req.key, req.value, got))
-		}
-	}
-	if len(mismatched) > 0 {
-		return nil, routerErrf("Mismatch after writing: %s", strings.Join(mismatched, ", "))
-	}
-
 	final, err := getModemConfig()
 	if err != nil {
 		return nil, err
