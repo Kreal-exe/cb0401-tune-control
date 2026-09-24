@@ -739,9 +739,16 @@ func unlock5GBands() (string, error) {
 	// Seed band_prefs.conf with whatever the modem is already configured
 	// for right now (rather than the hook's own hardcoded fallback), so
 	// installing the hook doesn't change bands you've already picked.
-	if cfg, err := getModemConfig(); err == nil && cfg["nr5g_band"] != "" {
-		cfgMode, _ := strconv.Atoi(cfg["nr5g_disable_mode"])
-		_ = updateBandPrefs(cfg["nr5g_band"], cfg["nsa_nr5g_band"], cfgMode)
+	// Only do this if no prefs file exists yet - otherwise re-running this
+	// (e.g. to redeploy a fixed hook script) would read the modem's current
+	// state, which may itself be the OLD hook's hardcoded reset (mode 0),
+	// and clobber a mode/band choice already saved in the conf.
+	prefsExist, _ := run(fmt.Sprintf("[ -f %s ] && echo 1 || echo 0", band5gPrefsPath), 10*time.Second)
+	if strings.TrimSpace(prefsExist) != "1" {
+		if cfg, err := getModemConfig(); err == nil && cfg["nr5g_band"] != "" {
+			cfgMode, _ := strconv.Atoi(cfg["nr5g_disable_mode"])
+			_ = updateBandPrefs(cfg["nr5g_band"], cfg["nsa_nr5g_band"], cfgMode)
+		}
 	}
 
 	if _, err := run(fmt.Sprintf("rm -f /tmp/5g_band_patch.log; sh %s", band5gPatchPath), 10*time.Second); err != nil {
