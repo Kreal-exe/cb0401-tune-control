@@ -21,18 +21,29 @@ Everything is idempotent — re-running the setup script is safe and just verifi
 
 ## How SSH access is opened
 
-This isn't a novel exploit — it's documented Xiaomi router behavior that's been public knowledge in the router-hacking community for years:
+This isn't a novel exploit — it's documented Xiaomi router behavior that's been public knowledge in the router-hacking community for years. `bootstrap/open_ssh.sh`/`.ps1` try two paths automatically, in order:
+
+**Path A — Telnet (firmware < 3.0.100, the common case):**
 
 1. The router's web UI exposes an **unauthenticated** endpoint, `api/xqsystem/init_info`, which includes the device's serial number.
 2. Xiaomi's own firmware-imaging tool (`mkxqimage`) derives a default root/Telnet password from that serial number: `md5(serial + "6d2df50a-250f-4a30-a5e6-d44fb0960aa0")`, first 8 hex characters. That salt is a hardcoded GUID with its segments reversed, found by reverse-engineering `mkxqimage` itself — not something this project invented.
 3. Stock firmware ships with Telnet (port 23) always enabled, and root accepts that derived password.
-4. `bootstrap/open_ssh.sh`/`.ps1` log in over Telnet with it and apply the same "soft" persistence patch this project always used: enable dropbear (removing its release-build gate), set `nvram ssh_en=1`, and install a cron job + firewall include hook that keeps re-applying that every minute so it survives reboots. It then installs this toolkit's own SSH key directly, while already at a root shell.
+4. The script logs in over Telnet and applies the same "soft" persistence patch used by xmir-patcher: enable dropbear (removing its release-build gate), set `nvram ssh_en=1`, install a cron job + firewall include hook that keep re-applying this every minute so it survives reboots, then install this toolkit's own SSH key directly.
 
-**What the cron job and the firewall hook actually are.** Step 4 leaves two small pieces on the router, both pointing at one script, `/etc/crontabs/patches/ssh_patch.sh`. That script checks `nvram get ssh_en` (sets it to `1` if it isn't), removes the `"release"` check from `/etc/init.d/dropbear` so the SSH server is allowed to start on a retail build, then enables and restarts dropbear. It runs from a cron line (`*/1 * * * *`, every minute) and from a firewall include (`firewall.auto_ssh_patch`, which runs whenever the firewall reloads). The reason for two triggers is that the stock firmware can quietly turn SSH back off - after a reboot, or when it reapplies its own config - and either trigger notices and turns it back on. There's nothing else to configure: you never run or edit this by hand, and it only ever touches SSH.
+**Path B — CVE-2023-26319 web exploit (firmware 3.0.100+, Telnet closed):**
 
-**If port 22/23 is refused (newer firmware).** The flow above depends on Telnet being open, and users report that newer firmware (3.0.116 was reported in [#1](https://github.com/Kreal-exe/cb0401-tune-control/issues/1)) no longer exposes it, so `setup.sh`/`start.sh` fail with `Connection refused`. This project can't open SSH on such a firmware by itself. What's been reported to work: use [xmir-patcher](https://github.com/openwrt-xiaomi/xmir-patcher) once to make SSH permanently open, then run this toolkit as usual - everything after that step only needs SSH. Because the toolkit's own key isn't installed yet in that case, `start.sh` will ask for the router's root password once (the toolkit logs in as `root`); if you changed that password, enter your new one. I haven't been able to test this path myself, since it needs firmware that has Telnet closed.
+Newer firmware closes Telnet, but the SmartController API has a command injection vulnerability: the `mac` field in `xqsmarthome/request_smartcontroller` is passed unsanitised into a 100-byte `sprintf()` → `system()` call. Injecting `;CMD;` runs CMD as root, up to ~20 characters per call. The bootstrap script:
 
-This whole flow (the password derivation, the always-on Telnet, the dropbear/nvram patch) is well-established prior art — the same mechanism `xmir-patcher` itself relies on, used successfully against this exact router earlier in this project's development. `bootstrap/open_ssh.sh`/`.ps1` are a direct, faithful port of that logic to plain bash/PowerShell, with the password derivation and the unauthenticated HTTP fetch verified byte-for-byte identical between both implementations against real hardware. If it ever doesn't apply to your specific router (e.g. Telnet already closed some other way), `setup.sh`/`setup.ps1` fall back to asking for the router's password directly.
+1. Logs in to the web UI (same derived password, or set `WEB_PASSWORD=<password>` if you've changed it) to get a session token.
+2. Writes a bootstrap script to `/tmp/e` on the router in 2-character chunks via repeated injection calls (`echo -n "XX">>/tmp/e`, three HTTP requests per chunk: `scene_setting`, `scene_start_by_crontab`, `scene_delete`).
+3. Executes the script, which enables SSH and installs the toolkit's SSH key.
+4. Installs persistence (ssh_patch.sh, cron job, firewall hook) via the now-open SSH connection.
+
+This is the same mechanism [xmir-patcher](https://github.com/openwrt-xiaomi/xmir-patcher)'s `connect5.py` uses. The bootstrap script writes ~170 chunks (~510 HTTP requests), which takes roughly 3–5 minutes on a typical LAN connection.
+
+**What the cron job and the firewall hook actually are.** Both paths leave two small pieces on the router, both pointing at one script, `/etc/crontabs/patches/ssh_patch.sh`. That script sets `nvram ssh_en=1`, removes the `"release"` check from `/etc/init.d/dropbear` so the SSH server is allowed to start on a retail build, then enables and restarts dropbear. It runs from a cron line (`*/1 * * * *`, every minute) and from a firewall include (`firewall.auto_ssh_patch`, which runs whenever the firewall reloads). The reason for two triggers is that the stock firmware can quietly turn SSH back off — after a reboot, or when it reapplies its own config — and either trigger notices and turns it back on. There's nothing else to configure: you never run or edit this by hand, and it only ever touches SSH.
+
+**If both paths fail.** CVE-2023-26319 was patched in some firmware versions (the exploit is fully blocked when the router's `hackCheck` setting is 3). If both Telnet and the web exploit are refused, use [xmir-patcher](https://github.com/openwrt-xiaomi/xmir-patcher) once to open SSH, then run this toolkit as usual — everything after the first SSH connection only needs SSH. Because the toolkit's own key isn't installed yet in that case, `start.sh` will ask for the router's root password once.
 
 ## The GUI
 

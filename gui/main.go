@@ -12,6 +12,8 @@ import (
 	"strings"
 )
 
+const appVersion = "0.2.0"
+
 //go:embed templates/index.html
 var templatesFS embed.FS
 
