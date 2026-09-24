@@ -319,30 +319,30 @@ function markWifiDirty() { wifiDirty = true; }
 // Flat chip list — no repeated region headers inside each block. The region
 // is now chosen ONCE at the top (applyRegion) and immediately sets chips
 // across all three lists.
-function renderBandChips(containerId, allBands, activeStr, key) {
+function renderBandChips(containerId, allBands, activeStr, key, prefix) {
   const active = new Set((activeStr || '').split(':').filter(Boolean).map(Number));
   const el = document.getElementById(containerId);
   el.innerHTML = '';
   allBands.forEach(b => {
     const chip = document.createElement('div');
     chip.className = 'bandchip' + (active.has(b) ? ' on' : '');
-    chip.textContent = 'n' + b;
+    chip.textContent = prefix + b;
     chip.onclick = () => {
       if (active.has(b)) active.delete(b); else active.add(b);
       currentBands[key] = Array.from(active).sort((a,b)=>a-b).join(':');
       selectedRegion = null; // manual chip edit — no longer a "clean" region preset
       bandsDirty = true;
       highlightRegionButton();
-      renderBandChips(containerId, allBands, currentBands[key], key);
+      renderBandChips(containerId, allBands, currentBands[key], key, prefix);
     };
     el.appendChild(chip);
   });
 }
 
 function renderAllBandLists() {
-  renderBandChips('nr5gBands', NR5G_ALL, currentBands.nr5g_band, 'nr5g_band');
-  renderBandChips('nsaBands', NR5G_ALL, currentBands.nsa_nr5g_band, 'nsa_nr5g_band');
-  renderBandChips('lteBands', LTE_ALL, currentBands.lte_band, 'lte_band');
+  renderBandChips('nr5gBands', NR5G_ALL, currentBands.nr5g_band, 'nr5g_band', 'n');
+  renderBandChips('nsaBands', NR5G_ALL, currentBands.nsa_nr5g_band, 'nsa_nr5g_band', 'n');
+  renderBandChips('lteBands', LTE_ALL, currentBands.lte_band, 'lte_band', 'B');
 }
 
 let selectedRegion = null;
