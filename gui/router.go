@@ -302,6 +302,7 @@ func setNr5gMode(mode int) (map[string]string, error) {
 	if _, err := atQuery([]string{fmt.Sprintf(`AT+QNWPREFCFG="nr5g_disable_mode",%d`, mode)}, 1500*time.Millisecond); err != nil {
 		return nil, err
 	}
+	_ = updateModePrefs(mode)
 	return getModemConfig()
 }
 
@@ -339,7 +340,8 @@ func setBands(nr5gBand, nsaNr5gBand, lteBand string) (map[string]string, error) 
 	if err != nil {
 		return nil, err
 	}
-	_ = updateBandPrefs(final["nr5g_band"], final["nsa_nr5g_band"])
+	nr5gMode, _ := strconv.Atoi(final["nr5g_disable_mode"])
+	_ = updateBandPrefs(final["nr5g_band"], final["nsa_nr5g_band"], nr5gMode)
 	return final, nil
 }
 
@@ -646,10 +648,11 @@ echo "5g band hook installed" > /tmp/5g_band_patch.log
 CONF="/data/custom/hooks/band_prefs.conf"
 NR5G_BAND="1:3:7:28:38:75:78"
 NSA_NR5G_BAND="1:3:7:28:38:75:78"
+NR5G_MODE="0"
 [ -f "$CONF" ] && . "$CONF"
 ATPORT="/dev/ttyUSB2"
 send() { printf '%s\r' "$1" >"$ATPORT"; usleep 100000; }
-send 'AT+QNWPREFCFG="nr5g_disable_mode",0'
+send "AT+QNWPREFCFG=\"nr5g_disable_mode\",$NR5G_MODE"
 send "AT+QNWPREFCFG=\"nsa_nr5g_band\",$NSA_NR5G_BAND"
 send "AT+QNWPREFCFG=\"nr5g_band\",$NR5G_BAND"
 `
@@ -670,14 +673,31 @@ config include 'auto_5g_band_patch'
 // through the Cellular card - without this, the hook's own hardcoded
 // fallback would silently overwrite that choice the next time the modem
 // reconnects. A no-op if the hook was never installed.
-func updateBandPrefs(nr5gBand, nsaNr5gBand string) error {
-	installed, err := run(fmt.Sprintf("[ -f %s ] && echo 1 || echo 0", band5gHookPath), 10*time.Second)
-	if err != nil || strings.TrimSpace(installed) != "1" {
+func hookInstalled() bool {
+	out, err := run(fmt.Sprintf("[ -f %s ] && echo 1 || echo 0", band5gHookPath), 10*time.Second)
+	return err == nil && strings.TrimSpace(out) == "1"
+}
+
+func updateBandPrefs(nr5gBand, nsaNr5gBand string, nr5gMode int) error {
+	if !hookInstalled() {
 		return nil
 	}
-	content := fmt.Sprintf("NR5G_BAND=%s\nNSA_NR5G_BAND=%s\n", nr5gBand, nsaNr5gBand)
+	content := fmt.Sprintf("NR5G_BAND=%s\nNSA_NR5G_BAND=%s\nNR5G_MODE=%d\n", nr5gBand, nsaNr5gBand, nr5gMode)
 	b64 := base64.StdEncoding.EncodeToString([]byte(content))
-	_, err = run(fmt.Sprintf("echo %s | base64 -d > %s", b64, band5gPrefsPath), 10*time.Second)
+	_, err := run(fmt.Sprintf("echo %s | base64 -d > %s", b64, band5gPrefsPath), 10*time.Second)
+	return err
+}
+
+// updateModePrefs updates only NR5G_MODE in the prefs file without touching band values.
+func updateModePrefs(mode int) error {
+	if !hookInstalled() {
+		return nil
+	}
+	cmd := fmt.Sprintf(
+		"touch %s && sed -i '/^NR5G_MODE=/d' %s && printf 'NR5G_MODE=%%d\\n' %d >> %s",
+		band5gPrefsPath, band5gPrefsPath, mode, band5gPrefsPath,
+	)
+	_, err := run(cmd, 10*time.Second)
 	return err
 }
 
@@ -720,7 +740,8 @@ func unlock5GBands() (string, error) {
 	// for right now (rather than the hook's own hardcoded fallback), so
 	// installing the hook doesn't change bands you've already picked.
 	if cfg, err := getModemConfig(); err == nil && cfg["nr5g_band"] != "" {
-		_ = updateBandPrefs(cfg["nr5g_band"], cfg["nsa_nr5g_band"])
+		cfgMode, _ := strconv.Atoi(cfg["nr5g_disable_mode"])
+		_ = updateBandPrefs(cfg["nr5g_band"], cfg["nsa_nr5g_band"], cfgMode)
 	}
 
 	if _, err := run(fmt.Sprintf("rm -f /tmp/5g_band_patch.log; sh %s", band5gPatchPath), 10*time.Second); err != nil {
