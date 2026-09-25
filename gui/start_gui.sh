@@ -12,14 +12,16 @@ BIN="./cb0401-tune-control"
 PORT=5757
 PIDFILE="/tmp/cb0401_tune_control_gui.pid"
 
-if [ ! -x "$BIN" ]; then
-  command -v go >/dev/null 2>&1 || {
+command -v go >/dev/null 2>&1 || {
+  [ -x "$BIN" ] && echo "Go not installed, using existing binary." || {
     echo "ERROR: no compiled GUI found at $BIN, and 'go' isn't installed to build one."
     echo "Either install Go (https://go.dev/dl/) and re-run this script, or copy a"
     echo "prebuilt binary from dist/ (see build.sh) to $BIN."
     exit 1
   }
-  echo "Building the GUI (one-time)..."
+}
+if command -v go >/dev/null 2>&1; then
+  echo "Building the GUI..."
   go build -o "$BIN" .
 fi
 

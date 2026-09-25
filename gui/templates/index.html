@@ -83,7 +83,7 @@
 <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()">🌙</button>
 
 <h1>XIAOMI 5G CPE PRO CB0401V1/V2 Tune + Control</h1>
-<div class="sub">Local panel for the router (192.168.31.1) &middot; <span id="lastUpdate">—</span> <button class="refresh-btn" onclick="loadStatus()">⟳</button> &middot; v0.3.0</div>
+<div class="sub">Local panel for the router (192.168.31.1) &middot; <span id="lastUpdate">—</span> <button class="refresh-btn" onclick="loadStatus()">⟳</button> &middot; v0.3.1</div>
 
 <div class="grid">
 
@@ -94,6 +94,9 @@
     <div class="row"><span class="k">Memory free</span><span class="v" id="sysMem">—</span></div>
     <div class="row"><span class="k">SoC temperature</span><span class="v" id="sysTemp">—</span></div>
     <div class="row"><span class="k">Uptime</span><span class="v" id="sysUptime">—</span></div>
+    <div class="row"><span class="k">Download</span><span class="v" id="duRx">—</span></div>
+    <div class="row"><span class="k">Upload</span><span class="v" id="duTx">—</span></div>
+    <div class="row"><span class="k">Total</span><span class="v" id="duTotal">—</span></div>
     <div class="actions" style="margin-top:12px;">
       <button class="danger" onclick="rebootRouter()">Reboot router</button>
       <button class="danger" onclick="spoofVersion()">Spoof version → 0.0.1 (for downgrade via web UI)</button>
@@ -582,6 +585,25 @@ async function loadSystemHealth() {
   }
 }
 
+function formatBytes(bytes) {
+  if (bytes == null || bytes < 0) return '—';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+  return (bytes / 1073741824).toFixed(2) + ' GB';
+}
+
+async function loadDataUsage() {
+  try {
+    const d = await api('/api/data-usage');
+    document.getElementById('duRx').textContent = formatBytes(d.rx);
+    document.getElementById('duTx').textContent = formatBytes(d.tx);
+    document.getElementById('duTotal').textContent = formatBytes(d.total);
+  } catch (e) {
+    document.getElementById('duRx').textContent = 'error';
+  }
+}
+
 function onNotifyBackendChange() {
   const backend = document.querySelector('input[name=notifyBackend]:checked').value;
   document.getElementById('notifyNtfyFields').style.display = backend === 'ntfy' ? '' : 'none';
@@ -766,9 +788,11 @@ loadStatus();
 loadSshInfo();
 loadDeviceMonitor();
 loadSystemHealth();
+loadDataUsage();
 setInterval(loadStatus, 20000);
 setInterval(loadDeviceMonitor, 60000);
 setInterval(loadSystemHealth, 20000);
+setInterval(loadDataUsage, 30000);
 </script>
 
 </body>

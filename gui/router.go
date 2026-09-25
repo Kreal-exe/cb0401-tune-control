@@ -1233,6 +1233,46 @@ func setRootPassword(newPassword string) error {
 	return nil
 }
 
+// ----------------------------------------------------------- Data usage ---
+
+func getDataUsage() (map[string]any, error) {
+	raw, err := run(`IFACE=$(uci -q get network.wan_2.ifname 2>/dev/null || true)
+[ -z "$IFACE" ] && IFACE=$(uci -q get network.wan_2.device 2>/dev/null || true)
+[ -z "$IFACE" ] && [ -d /sys/class/net/wwan0 ] && IFACE=wwan0
+[ -z "$IFACE" ] && [ -d /sys/class/net/rmnet_data0 ] && IFACE=rmnet_data0
+[ -z "$IFACE" ] && [ -d /sys/class/net/usb0 ] && IFACE=usb0
+if [ -z "$IFACE" ]; then echo "ERR:no_interface"; exit 0; fi
+echo "IFACE=$IFACE"
+echo "RX=$(cat /sys/class/net/$IFACE/statistics/rx_bytes 2>/dev/null || echo 0)"
+echo "TX=$(cat /sys/class/net/$IFACE/statistics/tx_bytes 2>/dev/null || echo 0)"`, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if strings.Contains(raw, "ERR:no_interface") {
+		return nil, routerErrf("Could not find cellular WAN interface")
+	}
+
+	var iface string
+	var rx, tx int64
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "IFACE=") {
+			iface = line[6:]
+		} else if strings.HasPrefix(line, "RX=") {
+			rx, _ = strconv.ParseInt(line[3:], 10, 64)
+		} else if strings.HasPrefix(line, "TX=") {
+			tx, _ = strconv.ParseInt(line[3:], 10, 64)
+		}
+	}
+
+	return map[string]any{
+		"interface": iface,
+		"rx":        rx,
+		"tx":        tx,
+		"total":     rx + tx,
+	}, nil
+}
+
 // --------------------------------------------------------------- Raw exec ---
 
 // rawShell runs an arbitrary shell command - for the "advanced" tab. Use

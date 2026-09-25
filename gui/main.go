@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-const appVersion = "0.3.0"
+const appVersion = "0.3.1"
 
 //go:embed templates/index.html
 var templatesFS embed.FS
@@ -240,6 +240,15 @@ func handleNotifyConfig(w http.ResponseWriter, r *http.Request) {
 	ok(w, cfg)
 }
 
+func handleDataUsage(w http.ResponseWriter, r *http.Request) {
+	data, err := getDataUsage()
+	if err != nil {
+		errResp(w, err)
+		return
+	}
+	ok(w, data)
+}
+
 func handleRaw(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Cmd string `json:"cmd"`
@@ -353,6 +362,7 @@ func main() {
 	mux.HandleFunc("/api/device-monitor", handleDeviceMonitor)
 	mux.HandleFunc("/api/device-monitor/whitelist", requireMethod(http.MethodPost, handleDeviceMonitorWhitelist))
 	mux.HandleFunc("/api/notify-config", requireMethod(http.MethodPost, handleNotifyConfig))
+	mux.HandleFunc("/api/data-usage", handleDataUsage)
 	mux.HandleFunc("/api/raw", requireMethod(http.MethodPost, handleRaw))
 
 	addr := "127.0.0.1:5757"
