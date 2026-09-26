@@ -128,7 +128,7 @@ function animate() {
   for (const [mac, line] of Object.entries(linkObjs)) {
     const l = links.find((x) => x.mac === mac);
     const on = l && !l.stale;
-    const k = on ? Math.min(1, l.score / 1.5) : 0;
+    const k = on ? Math.min(1, l.score / (2 * l.threshold)) : 0;
     line.material.color.copy(on ? live.clone().lerp(hot, k) : cool);
     line.material.opacity = on ? 0.45 + 0.55 * k : 0.35;
   }

@@ -101,7 +101,8 @@ function snap(p, from) {
 
 // --------------------------------------------------------------- saving ---
 let saveTimer = null;
-function planChanged() {
+function planChanged(auto) {
+  if (!auto) S.plan.auto = false;
   S.planListeners.forEach((f) => f());
   clearTimeout(saveTimer);
   $('saved').textContent = 'saving…';
@@ -134,7 +135,7 @@ function draw() {
       const l = linkOf(mac);
       const [ax, ay] = toScreen(R[0], R[1]), [bx, by] = toScreen(p[0], p[1]);
       const live = l && !l.stale;
-      const k = live ? Math.min(1, l.score / 1.5) : 0;
+      const k = live ? Math.min(1, l.score / (2 * l.threshold)) : 0;
       ctx.lineWidth = 2 + 6 * k;
       ctx.strokeStyle = !live ? 'rgba(90,104,120,0.35)' : `rgba(${Math.round(94 + 33 * k)},${Math.round(224 + 19 * k)},${Math.round(193 + 62 * k)},${0.35 + 0.6 * k})`;
       ctx.setLineDash(live ? [] : [6, 6]);
@@ -331,10 +332,10 @@ function renderDevices() {
     const li = document.createElement('li');
     const band = s && s.ghz ? (s.ghz < 3 ? '2.4 GHz' : '5 GHz') : '';
     const dist = s && estDistance(s.rssi);
-    const meta = [mac, band, s && s.rssi ? `${s.rssi} dBm${dist ? ` ≈ ${dist.toFixed(1)} m` : ''}` : '', l && !l.stale ? `${l.rate.toFixed(0)} frames/s` : '', s && s.power_save ? 'power save' : ''].filter(Boolean).join(' · ');
+    const meta = [mac, band, s && s.rssi ? `${s.rssi} dBm${dist ? ` ≈ ${dist.toFixed(1)} m` : ''}` : '', l && !l.stale ? `${l.rate.toFixed(0)} frames/s` : '', s && s.power_save ? 'power save' : '', l && l.noisy ? 'noisy link: needs a big change to count' : ''].filter(Boolean).join(' · ');
     li.innerHTML = `<div class="dev-top"><span class="dev-name"></span><span class="dev-state ${cls}">${txt}</span></div>
       <div class="dev-meta">${meta}</div>
-      <div class="bar"><i style="width:${l && !l.stale ? Math.min(100, l.score / 1.5 * 100) : 0}%"></i></div>`;
+      <div class="bar"><i style="width:${l && !l.stale ? Math.min(100, l.score / (2 * l.threshold) * 100) : 0}%"></i></div>`;
     li.querySelector('.dev-name').textContent = labelOf(mac);
     if (editing) {
       const acts = document.createElement('div'); acts.className = 'dev-actions';
@@ -360,9 +361,31 @@ function renderSummary() {
   const live = (s.links || []).filter((l) => !l.stale);
   const moving = live.filter((l) => l.motion && !l.learning);
   if (!S.plan.router) { el.innerHTML = 'Click <b>Edit plan</b>, draw the walls, then place the router and devices.'; return; }
+  const autoNote = S.plan.auto ? '<br><span style="color:#f2b35b">Placed automatically from signal strength. Click <b>Edit plan</b> to draw your walls and drag the router and devices to where they really are.</span>' : '';
   if (!live.length) { el.textContent = 'No capture data from the router.'; return; }
   if (live.every((l) => l.learning)) { el.textContent = 'Learning the normal signal level, about 10 seconds…'; return; }
-  el.innerHTML = moving.length ? `<b>Motion</b> on ${moving.map((l) => escapeHtml(labelOf(l.mac))).join(', ')}` : 'Quiet: no movement';
+  el.innerHTML = (moving.length ? `<b>Motion</b> on ${moving.map((l) => escapeHtml(labelOf(l.mac))).join(', ')}` : 'Quiet: no movement') + autoNote;
+}
+
+// ----------------------------------------------------------- auto layout ---
+// With no plan yet, put the router in the middle and every captured device
+// at its signal-strength distance, spread around it, so the map shows links
+// and the dot right away. Distances are rough and directions are made up -
+// the summary asks to drag things to where they really are.
+function autoLayout() {
+  if (S.plan.router || editing || !S.state) return;
+  const links = (S.state.links || []).filter((l) => !l.stale);
+  if (!links.length) return;
+  S.plan.router = [0, 0];
+  links.forEach((l, i) => {
+    const st = stationOf(l.mac);
+    const d = estDistance((st && st.rssi) || l.rssi) || 3;
+    const a = (i / links.length) * Math.PI * 2 + 0.4;
+    S.plan.devices[l.mac] = [Math.round(Math.cos(a) * d * 10) / 10, Math.round(Math.sin(a) * d * 10) / 10];
+  });
+  S.plan.auto = true;
+  userMovedView = false; fit();
+  planChanged(true);
 }
 
 // ---------------------------------------------------------------- stream ---
@@ -373,6 +396,7 @@ function connect() {
     const pill = $('status');
     if (S.state.receiving) { pill.textContent = 'live'; pill.className = 'pill ok'; }
     else { pill.textContent = S.state.error ? 'router unreachable' : 'no capture data'; pill.className = 'pill bad'; }
+    autoLayout();
     renderSummary();
     if (!editing || !document.querySelector('#devices li:hover')) renderDevices();
   };

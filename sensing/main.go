@@ -32,8 +32,9 @@ var webFS embed.FS
 type Plan struct {
 	Walls   [][4]float64          `json:"walls"`
 	Router  *[2]float64           `json:"router"`
-	Devices map[string][2]float64 `json:"devices"` // MAC -> position
-	Names   map[string]string     `json:"names"`   // MAC -> your own label
+	Devices map[string][2]float64 `json:"devices"`        // MAC -> position
+	Names   map[string]string     `json:"names"`          // MAC -> your own label
+	Auto    bool                  `json:"auto,omitempty"` // laid out automatically, not yet adjusted by hand
 }
 
 type server struct {

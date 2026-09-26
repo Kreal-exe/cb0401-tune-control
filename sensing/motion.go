@@ -13,8 +13,14 @@ package main
 //
 // Each link gets its own baseline (20th percentile of the last 10 minutes),
 // because links differ a lot in level and noise; the score is how far the
-// current value is above it (0 = normal, 1 = double). A link counts as
-// "motion" above -threshold.
+// current value is above it (0 = normal, 1 = double). Each link also gets
+// its own threshold: at least -threshold, and at least twice its normal
+// noise band (75th minus 20th percentile, relative to the baseline). A
+// quiet, steady link keeps the plain 40%; a jittery one - a device in power
+// save, a weak signal - needs a proportionally bigger swing, so it stops
+// crying wolf (the smart bulb's link was flagged as "motion" 108 of 121
+// times with a fixed 40%, confirmed live). Links whose threshold ends up
+// above 150% are reported as noisy.
 //
 // What this can't do, stated plainly: tell where along the link someone
 // is, or see a person standing perfectly still for long. The dot on the
@@ -53,20 +59,23 @@ type link struct {
 	histT    []time.Time
 	metric   float64
 	baseline float64
+	thr      float64 // this link's own threshold on score
 	score    float64
 }
 
 // LinkState is what the page gets for each link.
 type LinkState struct {
-	MAC      string  `json:"mac"`
-	Rate     float64 `json:"rate"`     // frames/s
-	Metric   float64 `json:"metric"`   // current fluctuation
-	Baseline float64 `json:"baseline"` // this link's normal level
-	Score    float64 `json:"score"`    // metric/baseline - 1, smoothed
-	Motion   bool    `json:"motion"`   // score above threshold
-	Learning bool    `json:"learning"` // not enough history for a baseline yet
-	Stale    bool    `json:"stale"`    // no frames for a few seconds
-	RSSI     int     `json:"rssi"`
+	MAC       string  `json:"mac"`
+	Rate      float64 `json:"rate"`      // frames/s
+	Metric    float64 `json:"metric"`    // current fluctuation
+	Baseline  float64 `json:"baseline"`  // this link's normal level
+	Score     float64 `json:"score"`     // metric/baseline - 1, smoothed
+	Motion    bool    `json:"motion"`    // score above this link's threshold
+	Threshold float64 `json:"threshold"` // this link's threshold on score
+	Noisy     bool    `json:"noisy"`     // jittery link: threshold raised well above the default
+	Learning  bool    `json:"learning"`  // not enough history for a baseline yet
+	Stale     bool    `json:"stale"`     // no frames for a few seconds
+	RSSI      int     `json:"rssi"`
 }
 
 // Dot is the light on the plan: where movement is, roughly, and how much.
@@ -271,21 +280,28 @@ func (a *analyzer) tick(now time.Time, pl Plan) ([]LinkState, Dot) {
 				l.baseline = percentile(l.hist, 0.2)
 				if l.baseline > 0 {
 					raw = math.Max(0, l.metric/l.baseline-1)
+					band := (percentile(l.hist, 0.75) - l.baseline) / l.baseline
+					l.thr = math.Max(a.threshold, 2*band)
 				}
 			}
 		}
 		l.score += (raw - l.score) * math.Min(1, dt/0.75)
 
+		thr := l.thr
+		if thr <= 0 {
+			thr = a.threshold
+		}
 		st := LinkState{
 			MAC: mac, Rate: frameRate(l.frames), Metric: l.metric, Baseline: l.baseline,
-			Score: l.score, Motion: l.score > a.threshold, Learning: len(l.hist) < warmupSamples,
+			Score: l.score, Motion: !stale && len(l.hist) >= warmupSamples && l.score > thr,
+			Threshold: thr, Noisy: thr > 1.5, Learning: len(l.hist) < warmupSamples,
 			Stale: stale, RSSI: int(l.rssi),
 		}
 		states = append(states, st)
 
 		if st.Motion && pl.Router != nil {
 			if p, ok := pl.Devices[mac]; ok {
-				w := l.score
+				w := l.score / thr // how far past its own threshold
 				wSum += w
 				xSum += w * (pl.Router[0] + p[0]) / 2
 				ySum += w * (pl.Router[1] + p[1]) / 2
@@ -296,7 +312,7 @@ func (a *analyzer) tick(now time.Time, pl Plan) ([]LinkState, Dot) {
 
 	// The dot: glide toward the weighted middle of the moving links,
 	// fade in/out with the total amount of movement.
-	target := math.Min(1, wSum/1.5)
+	target := math.Min(1, wSum/2.5)
 	if wSum > 0 {
 		tx, ty := xSum/wSum, ySum/wSum
 		if !a.dot.Placed || a.dot.Intensity < 0.05 {
