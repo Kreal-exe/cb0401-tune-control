@@ -82,6 +82,17 @@ STATE=/tmp/cfr_periodic_armed.txt # "vap mac" per line: what this daemon has sta
 CONF="$DIR/cfr_capture.conf"
 POLL_SECONDS=2       # reader window = dump file rotation period
 RECONCILE_SECONDS=10 # how often the peer selection is re-evaluated
+# Backlog cap. The dump files go to /tmp, which is RAM (tmpfs) on this
+# router: 405 MB total, ~175 MB free, no swap. At 20 ms one client alone
+# writes ~390 KB/s, so with nobody collecting (ruview-bridge not running -
+# e.g. the Mac asleep or rebooted) RAM ran out in about 8 minutes and the
+# router went down - it rebooted every ~13 minutes on 2026-09-26 while this
+# daemon kept capturing with no consumer. Now: never keep more than
+# MAX_BACKLOG_KB of uncollected files (oldest are dropped), and if the
+# backlog stays over the cap for NO_CONSUMER_SECONDS, nobody is reading -
+# stop capturing altogether and switch the timer off.
+MAX_BACKLOG_KB=16384
+NO_CONSUMER_SECONDS=60
 # 20 ms -> ~46-50 Hz per peer: RuView's own ceiling. Its per-node vitals
 # detector clamps the sample rate to 50 Hz and sizes its 30 s / 15 s
 # breathing/heart windows from that, so feeding more per node would
@@ -209,6 +220,20 @@ disable_timer() {
     log "CFR periodic timer switched off"
 }
 
+# Prints the dump backlog size in KB after trimming it to MAX_BACKLOG_KB,
+# dropping the oldest files first.
+prune_backlog() {
+    total=$(du -k /tmp/cfr_dump_wifi*.bin 2>/dev/null | awk '{s += $1} END {print s + 0}')
+    over=$total
+    while [ "$total" -gt "$MAX_BACKLOG_KB" ]; do
+        oldest=$(ls -tr /tmp/cfr_dump_wifi*.bin 2>/dev/null | head -n 1)
+        [ -n "$oldest" ] || break
+        rm -f "$oldest"
+        total=$(du -k /tmp/cfr_dump_wifi*.bin 2>/dev/null | awk '{s += $1} END {print s + 0}')
+    done
+    echo "$over"
+}
+
 daemon_pid() {
     [ -f "$PIDFILE" ] || return 1
     pid=$(cat "$PIDFILE" 2>/dev/null)
@@ -239,6 +264,7 @@ run_daemon() {
     enable_timer
     stop_all_stations
     last=0
+    overflow_since=0
     while :; do
         now=$(date +%s)
         if [ $((now - last)) -ge "$RECONCILE_SECONDS" ]; then
@@ -248,6 +274,20 @@ run_daemon() {
         start_readers
         sleep "$POLL_SECONDS"
         stop_readers
+        backlog=$(prune_backlog)
+        now=$(date +%s)
+        if [ "$backlog" -gt "$MAX_BACKLOG_KB" ]; then
+            [ "$overflow_since" -gt 0 ] || overflow_since=$now
+            if [ $((now - overflow_since)) -ge "$NO_CONSUMER_SECONDS" ]; then
+                log "nobody has collected the captures for ${NO_CONSUMER_SECONDS}s (backlog ${backlog} KB) - stopping"
+                stop_all_captures
+                disable_timer
+                rm -f /tmp/cfr_dump_wifi*.bin "$PIDFILE"
+                exit 0
+            fi
+        else
+            overflow_since=0
+        fi
     done
 }
 
