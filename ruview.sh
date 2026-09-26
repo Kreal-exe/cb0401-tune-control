@@ -484,6 +484,7 @@ echo "ruview-bridge pid=$BRIDGE_PID (log: /tmp/ruview-bridge-log.log)"
 # this script for why it stays in the foreground. Installed here, before
 # the tunnel step, so a failure there still tears the rest down.
 cleanup() {
+  trap - EXIT INT TERM # run once (Ctrl+C would otherwise run it again on exit)
   echo
   echo "Stopping RuView processes ($PIDS)..."
   # shellcheck disable=SC2086
