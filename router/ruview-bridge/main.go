@@ -228,6 +228,10 @@ type node struct {
 	gains     []float64
 	chainSum  []float64
 	gainCount int
+	// Frame shape fixed by the first frame sent for this node (chains,
+	// subcarriers per chain); anything else is skipped - see esp32Samples
+	// for why a shape change is fatal to the node in RuView.
+	chains, perChain int
 }
 
 var nodes = map[string]*node{}
@@ -301,25 +305,14 @@ func esp32Samples(rec rawRecord) (int, int, []polar, error) {
 		}
 		return l.chains, kept, samples, nil
 	}
-	// Record sizes not mapped above: decimate the whole payload.
-	rxCount := 1
-	if n%4 == 0 {
-		rxCount = 4
-	}
-	subcarriers := n / rxCount
-	stride := (subcarriers + esp32MaxSubcarrier - 1) / esp32MaxSubcarrier
-	kept := (subcarriers + stride - 1) / stride
-
-	samples := make([]polar, 0, rxCount*kept)
-	for r := 0; r < rxCount; r++ {
-		for k := 0; k < subcarriers; k += stride {
-			off := (r*subcarriers + k) * 4
-			i := float64(int16(binary.LittleEndian.Uint16(rec.payload[off:])))
-			q := float64(int16(binary.LittleEndian.Uint16(rec.payload[off+2:])))
-			samples = append(samples, polar{math.Hypot(i, q), math.Atan2(q, i)})
-		}
-	}
-	return rxCount, kept, samples, nil
+	// Any other record size is skipped rather than decimated as before:
+	// RuView locks each node onto the densest subcarrier grid it has ever
+	// seen and silently drops every frame on a sparser one, so a single
+	// odd-sized record (sent as up to 256 bins) switched the node off for
+	// good - its stream froze on the last accepted frame while this bridge
+	// kept sending (confirmed live: node stale after ~200 s, a synthetic
+	// node on the same port still accepted).
+	return 0, 0, nil, fmt.Errorf("unmapped CFR record size (%d I/Q pairs) - skipped", n)
 }
 
 // encodeESP32 builds one output frame from consecutive records of one
@@ -333,6 +326,11 @@ func encodeESP32(group []rawRecord, nd *node, freqMHz uint16) ([]byte, error) {
 	rxCount, kept, samples, err := esp32Samples(rec)
 	if err != nil {
 		return nil, err
+	}
+	if nd.chains == 0 {
+		nd.chains, nd.perChain = rxCount, kept
+	} else if rxCount != nd.chains || kept != nd.perChain {
+		return nil, fmt.Errorf("frame shape %dx%d differs from this node's %dx%d - skipped", rxCount, kept, nd.chains, nd.perChain)
 	}
 	used := 1
 	for _, o := range group[:len(group)-1] {
@@ -656,6 +654,7 @@ func main() {
 			gap = budget / time.Duration(len(units))
 		}
 		sent := map[string]int{}
+		skipped := map[string]int{} // reason -> count, reported in the batch line
 		for i, u := range units {
 			if i > 0 && gap > 0 {
 				time.Sleep(gap)
@@ -665,7 +664,7 @@ func main() {
 				if nd == nil {
 					fmt.Fprintf(os.Stderr, "peer %s: more than 255 distinct peers, ESP32 node ids exhausted\n", u.mac)
 				} else if pkt, err := encodeESP32(u.group, nd, uint16(*centerFreqMHz)); err != nil {
-					fmt.Fprintf(os.Stderr, "encode %s: %v\n", u.mac, err)
+					skipped[u.mac+": "+err.Error()]++
 				} else if _, err := conn.Write(pkt); err != nil {
 					fmt.Fprintf(os.Stderr, "send %s: %v\n", u.mac, err)
 				} else {
@@ -697,6 +696,9 @@ func main() {
 		sort.Strings(parts)
 		fmt.Printf("%s batch: %d file(s), %d records -> %d frames over %.1fs: %s\n",
 			time.Now().Format("15:04:05"), len(files), rawCount, len(units), span.Seconds(), strings.Join(parts, " "))
+		for why, n := range skipped {
+			fmt.Printf("  skipped %d: %s\n", n, why)
+		}
 	}
 }
 
