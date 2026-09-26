@@ -69,7 +69,6 @@ function bounds() {
 
 function rebuild(reason) {
   if (!scene) return;
-  ringSig = ''; // re-place the device rings too
   if (planGroup) { scene.remove(planGroup); planGroup.traverse((o) => { o.geometry && o.geometry.dispose(); }); }
   planGroup = new THREE.Group();
   linkObjs = {};
@@ -154,46 +153,12 @@ function animate() {
   const I = d && d.placed ? d.intensity : 0;
   if (d && d.placed) dot.position.set(d.x, 1.0, d.y);
   dot.visible = false; // replaced by the zones
-  updateRings(st);
   const pulse = 1 + 0.08 * Math.sin(performance.now() / 250);
   dot.material.opacity = I;
   halo.material.opacity = 0.9 * I;
   halo.scale.setScalar((1.6 + 1.6 * I) * pulse);
   dotLight.intensity = 4 * I;
   renderer.render(scene, camera);
-}
-
-// Devices not on the plan: a ring on the floor around the router at their
-// estimated distance, with a name tag (signal strength gives distance only).
-let ringGroup = null, ringSig = '';
-function textSprite(text) {
-  const c = document.createElement('canvas'); c.width = 512; c.height = 64;
-  const g = c.getContext('2d');
-  g.font = '28px -apple-system, sans-serif'; g.fillStyle = 'rgba(242,179,91,0.95)'; g.fillText(text, 8, 42);
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
-  sp.scale.set(2.4, 0.3, 1);
-  return sp;
-}
-function updateRings(st) {
-  const R = S.plan.router;
-  const list = R && st ? (st.stations || []).filter((x) => !S.plan.devices[x.mac] && S.estDistance(x.rssi)) : [];
-  const sig = (R ? R.join(',') : '') + '|' + list.map((x) => x.mac + ':' + x.rssi + ':' + (S.plan.names[x.mac] || x.name)).join(';');
-  if (sig === ringSig) return;
-  ringSig = sig;
-  if (ringGroup) { scene.remove(ringGroup); ringGroup.traverse((o) => { o.geometry && o.geometry.dispose(); o.material && o.material.map && o.material.map.dispose(); }); }
-  ringGroup = new THREE.Group();
-  for (const x of list) {
-    const d = S.estDistance(x.rssi);
-    const ring = new THREE.Mesh(new THREE.RingGeometry(d - 0.02, d + 0.02, 96),
-      new THREE.MeshBasicMaterial({ color: 0xf2b35b, transparent: true, opacity: 0.35, side: THREE.DoubleSide }));
-    ring.rotation.x = -Math.PI / 2; ring.position.set(R[0], 0.01, R[1]);
-    ringGroup.add(ring);
-    const a = S.hashAngle(x.mac);
-    const tag = textSprite(`${S.plan.names[x.mac] || x.name || x.mac} ~${d.toFixed(1)} m`);
-    tag.position.set(R[0] + Math.cos(a) * d + 1.1, 0.4, R[1] + Math.sin(a) * d);
-    ringGroup.add(tag);
-  }
-  scene.add(ringGroup);
 }
 
 S.zoom3d = (f) => {

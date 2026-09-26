@@ -61,19 +61,6 @@ function labelOf(mac) {
   const st = stationOf(mac);
   return S.plan.names[mac] || (st && st.name) || mac;
 }
-// Rough distance from the router from signal strength alone (log-distance
-// path loss: -40 dBm at 1 m, exponent 3 indoors). Walls and body blocking
-// make this coarse; a single router can't tell direction at all.
-function estDistance(rssi) {
-  if (!rssi) return null;
-  return Math.max(0.5, Math.min(15, Math.pow(10, (-40 - rssi) / 30)));
-}
-function hashAngle(mac) {
-  let h = 0;
-  for (const c of mac) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return (h % 360) * Math.PI / 180;
-}
-S.estDistance = estDistance; S.hashAngle = hashAngle;
 // The zone of a link: an ellipse with the router and the device as foci,
 // about 0.7 m either side of the line (never thinner than 15% of its length).
 function zoneOf(R, p) {
@@ -164,22 +151,6 @@ function draw() {
       ctx.setLineDash(live ? [] : [6, 6]);
       ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
       ctx.setLineDash([]);
-    }
-  }
-
-  // devices that aren't on the plan: a ring at their estimated distance
-  if (R && S.state) {
-    ctx.font = '11px sans-serif';
-    for (const st of S.state.stations || []) {
-      if (S.plan.devices[st.mac]) continue;
-      const d = estDistance(st.rssi);
-      if (!d) continue;
-      const [cx, cy] = toScreen(R[0], R[1]);
-      ctx.strokeStyle = 'rgba(242,179,91,0.28)'; ctx.lineWidth = 1.5; ctx.setLineDash([3, 5]);
-      ctx.beginPath(); ctx.arc(cx, cy, d * scale, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
-      const a = hashAngle(st.mac), lx = cx + Math.cos(a) * d * scale, ly = cy + Math.sin(a) * d * scale;
-      ctx.fillStyle = 'rgba(242,179,91,0.9)'; ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2); ctx.fill();
-      ctx.fillText(`${labelOf(st.mac)} ~${d.toFixed(1)} m`, lx + 6, ly - 4);
     }
   }
 
@@ -399,8 +370,7 @@ function renderDevices() {
     const [txt, cls] = stateText(l, s);
     const li = document.createElement('li');
     const band = s && s.ghz ? (s.ghz < 3 ? '2.4 GHz' : '5 GHz') : '';
-    const dist = s && estDistance(s.rssi);
-    const meta = [mac, band, s && s.rssi ? `${s.rssi} dBm${dist ? ` ≈ ${dist.toFixed(1)} m` : ''}` : '', l && !l.stale ? `${l.rate.toFixed(0)} frames/s` : '', s && s.power_save ? 'power save' : '', l && l.noisy ? 'noisy link: needs a big change to count' : ''].filter(Boolean).join(' · ');
+    const meta = [mac, band, s && s.rssi ? `signal ${s.rssi} dBm` : '', l && !l.stale ? `${l.rate.toFixed(0)} frames/s` : '', s && s.power_save ? 'power save' : '', l && l.noisy ? 'noisy link: needs a big change to count' : ''].filter(Boolean).join(' · ');
     li.innerHTML = `<div class="dev-top"><span class="dev-name"></span><span class="dev-state ${cls}">${txt}</span></div>
       <div class="dev-meta">${meta}</div>
       <div class="bar"><i style="width:${l && !l.stale ? Math.min(100, l.score / (2 * l.threshold) * 100) : 0}%"></i></div>`;
@@ -429,47 +399,30 @@ function renderSummary() {
   const live = (s.links || []).filter((l) => !l.stale);
   const moving = live.filter((l) => l.motion && !l.learning);
   if (!S.plan.router) { el.innerHTML = 'Click <b>Edit plan</b>, draw the walls, then place the router and devices.'; return; }
-  const autoNote = S.plan.auto ? '<br><span style="color:#f2b35b">Placed automatically from signal strength. Click <b>Edit plan</b> to draw your walls and drag the router and devices to where they really are.</span>' : '';
   if (!live.length) { el.textContent = 'No capture data from the router.'; return; }
   if (live.every((l) => l.learning)) { el.textContent = 'Learning the normal signal level, about 10 seconds…'; return; }
-  el.innerHTML = (moving.length ? `<b>Motion</b> near the line to ${moving.map((l) => escapeHtml(labelOf(l.mac))).join(', ')}` : 'Quiet: no movement') + autoNote;
+  el.innerHTML = (moving.length ? `<b>Motion</b> near the line to ${moving.map((l) => escapeHtml(labelOf(l.mac))).join(', ')}` : 'Quiet: no movement');
 }
 
-// ----------------------------------------------------------- auto layout ---
-// With no plan yet, put the router in the middle and every captured device
-// at its signal-strength distance, spread around it, so the map shows links
-// and the dot right away. Distances are rough and directions are made up -
-// the summary asks to drag things to where they really are.
-function autoLayout() {
-  if (S.plan.router || editing || !S.state) return;
-  const links = (S.state.links || []).filter((l) => !l.stale);
-  if (!links.length) return;
-  S.plan.router = [0, 0];
-  links.forEach((l, i) => {
-    const st = stationOf(l.mac);
-    const d = estDistance((st && st.rssi) || l.rssi) || 3;
-    const a = (i / links.length) * Math.PI * 2 + 0.4;
-    S.plan.devices[l.mac] = [Math.round(Math.cos(a) * d * 10) / 10, Math.round(Math.sin(a) * d * 10) / 10];
-  });
-  S.plan.auto = true;
-  userMovedView = false; fit();
-  planChanged(true);
+// Poll the newest state a few times a second. (An event stream never got
+// through the Cloudflare tunnel - it buffers the response.)
+function applyState(st) {
+  S.state = st;
+  const pill = $('status');
+  if (st.receiving) { pill.textContent = 'live'; pill.className = 'pill ok'; }
+  else { pill.textContent = st.error ? 'router unreachable' : 'no capture data'; pill.className = 'pill bad'; }
+  renderSummary();
+  if (!editing || !document.querySelector('#devices li:hover')) renderDevices();
 }
-
-// ---------------------------------------------------------------- stream ---
-function connect() {
-  const es = new EventSource('api/stream');
-  es.onmessage = (ev) => {
-    S.state = JSON.parse(ev.data);
-    const pill = $('status');
-    if (S.state.receiving) { pill.textContent = 'live'; pill.className = 'pill ok'; }
-    else { pill.textContent = S.state.error ? 'router unreachable' : 'no capture data'; pill.className = 'pill bad'; }
-    autoLayout();
-    renderSummary();
-    if (!editing || !document.querySelector('#devices li:hover')) renderDevices();
-  };
-  es.onerror = () => { $('status').textContent = 'reconnecting…'; $('status').className = 'pill bad'; };
+async function poll() {
+  try {
+    const r = await fetch('api/state', { cache: 'no-store' });
+    if (r.ok) { const st = await r.json(); if (st) applyState(st); }
+    else { $('status').textContent = r.status === 403 ? 'open the link you were sent' : 'server error ' + r.status; $('status').className = 'pill bad'; }
+  } catch (e) { $('status').textContent = 'reconnecting…'; $('status').className = 'pill bad'; }
+  setTimeout(poll, 300);
 }
+function connect() { poll(); }
 
 let userMovedView = false; // after the user pans or zooms, stop auto-fitting
 async function init() {

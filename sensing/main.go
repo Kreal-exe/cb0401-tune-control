@@ -51,6 +51,7 @@ type server struct {
 
 	subsMu sync.Mutex
 	subs   map[chan []byte]struct{}
+	latest []byte // newest snapshot, for /api/state polling
 }
 
 func (s *server) loadPlan() {
@@ -141,6 +142,7 @@ func (s *server) broadcastLoop() {
 		links, dot := s.an.tick(now, pl)
 		b, _ := json.Marshal(snapshot{Time: now.UnixMilli(), Links: links, Dot: dot, Stations: st, Receiving: receiving, Error: errText})
 		s.subsMu.Lock()
+		s.latest = b
 		for ch := range s.subs {
 			select {
 			case ch <- b:
@@ -183,6 +185,21 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 			fl.Flush()
 		}
 	}
+}
+
+// handleState returns the newest snapshot. The page polls this a few times
+// a second: an event stream (/api/stream) never arrived through the
+// Cloudflare quick tunnel - it buffers the response - so the public link
+// showed a page that waited forever (confirmed live).
+func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
+	s.subsMu.Lock()
+	b := s.latest
+	s.subsMu.Unlock()
+	if b == nil {
+		b = []byte("null")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(b)
 }
 
 func (s *server) handlePlan(w http.ResponseWriter, r *http.Request) {
@@ -285,6 +302,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.FS(static)))
 	mux.HandleFunc("/api/stream", s.handleStream)
+	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/plan", s.handlePlan)
 	noCache := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")

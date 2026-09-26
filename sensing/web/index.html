@@ -50,12 +50,12 @@
   </section>
   <aside>
     <h2>Devices</h2>
-    <p class="note">Movement is seen along the line between the router and a captured device. Place the router and devices on the plan (Edit plan) to get lines and movement zones on the map. Devices that aren't placed show as a ring at their estimated distance from the router.</p>
+    <p class="note">Movement is seen along the line between the router and a captured device. Place the router and devices on the plan (Edit plan) to get lines and movement zones on the map.</p>
     <ul id="devices"></ul>
     <details class="about">
       <summary>How it works</summary>
       <p>The router measures how the radio signal reaches each captured device. When someone moves between them, the channel starts to fluctuate. For every link, the fluctuation over the last second is compared with that link's normal level over the last 10 minutes.</p>
-      <p>A glowing zone appears around each line that sees movement; where zones overlap, the glow adds up. That is the honest resolution: a link can't tell where along its line someone is, so position gets finer only with more links crossing the home in different directions. Someone standing perfectly still fades out.</p><p>Device rings come from signal strength alone (a single router can't triangulate), so they show distance, not direction, and walls make them rough.</p>
+      <p>A glowing zone appears around each line that sees movement; where zones overlap, the glow adds up. That is the honest resolution: a link can't tell where along its line someone is, so position gets finer only with more links crossing the home in different directions. Someone standing perfectly still fades out.</p><p>Where a device is can't be measured with one router: signal strength depends on walls, the band (5 GHz fades faster) and each device's antenna, so a TV right behind a wall can look further away than a phone two rooms off. Place the devices yourself.</p>
     </details>
   </aside>
 </main>
