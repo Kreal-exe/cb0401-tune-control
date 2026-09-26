@@ -46,6 +46,16 @@ function init() {
   animate();
 }
 
+let zoneTexCache = null;
+function zoneTex() {
+  if (zoneTexCache) return zoneTexCache;
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'), gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.6, 'rgba(255,255,255,0.45)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+  return (zoneTexCache = new THREE.CanvasTexture(c));
+}
+
 function bounds() {
   const pts = [];
   for (const w of S.plan.walls) pts.push([w[0], w[1]], [w[2], w[3]]);
@@ -96,7 +106,14 @@ function rebuild(reason) {
       const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(R[0], 0.9, R[1]), new THREE.Vector3(p[0], 0.8, p[1])]);
       const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0x5a6878, transparent: true, opacity: 0.5 }));
       planGroup.add(line);
-      linkObjs[mac] = line;
+      const z = S.zoneOf(R, p);
+      const zone = new THREE.Mesh(new THREE.CircleGeometry(1, 64), new THREE.MeshBasicMaterial({
+        map: zoneTex(), color: 0x7ff3ff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }));
+      zone.scale.set(z.a, z.b, 1);
+      zone.rotation.set(-Math.PI / 2, 0, -z.angle);
+      zone.position.set(z.cx, 0.03, z.cy);
+      planGroup.add(zone);
+      linkObjs[mac] = { line, zone };
     }
   }
   scene.add(planGroup);
@@ -125,17 +142,18 @@ function animate() {
   controls.update();
   const st = S.state;
   const links = (st && st.links) || [];
-  for (const [mac, line] of Object.entries(linkObjs)) {
+  for (const [mac, o] of Object.entries(linkObjs)) {
     const l = links.find((x) => x.mac === mac);
     const on = l && !l.stale;
     const k = on ? Math.min(1, l.score / (2 * l.threshold)) : 0;
-    line.material.color.copy(on ? live.clone().lerp(hot, k) : cool);
-    line.material.opacity = on ? 0.45 + 0.55 * k : 0.35;
+    o.line.material.color.copy(on ? live.clone().lerp(hot, k) : cool);
+    o.line.material.opacity = on ? 0.45 + 0.55 * k : 0.35;
+    o.zone.material.opacity = 0.8 * S.zoneLevel(mac);
   }
   const d = st && st.dot;
   const I = d && d.placed ? d.intensity : 0;
   if (d && d.placed) dot.position.set(d.x, 1.0, d.y);
-  dot.visible = I > 0.01;
+  dot.visible = false; // replaced by the zones
   updateRings(st);
   const pulse = 1 + 0.08 * Math.sin(performance.now() / 250);
   dot.material.opacity = I;
@@ -177,6 +195,12 @@ function updateRings(st) {
   }
   scene.add(ringGroup);
 }
+
+S.zoom3d = (f) => {
+  if (!camera) return;
+  const v = camera.position.clone().sub(controls.target).multiplyScalar(1 / f);
+  camera.position.copy(controls.target).add(v);
+};
 
 S.planListeners.push((reason) => {
   if (!renderer && S.view === '3d') init();

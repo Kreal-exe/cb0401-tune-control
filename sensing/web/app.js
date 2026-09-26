@@ -74,6 +74,28 @@ function hashAngle(mac) {
   return (h % 360) * Math.PI / 180;
 }
 S.estDistance = estDistance; S.hashAngle = hashAngle;
+// The zone of a link: an ellipse with the router and the device as foci,
+// about 0.7 m either side of the line (never thinner than 15% of its length).
+function zoneOf(R, p) {
+  const L = Math.hypot(p[0] - R[0], p[1] - R[1]);
+  const b = Math.max(0.7, 0.15 * L);
+  return { cx: (R[0] + p[0]) / 2, cy: (R[1] + p[1]) / 2, a: Math.sqrt((L / 2) ** 2 + b * b), b, angle: Math.atan2(p[1] - R[1], p[0] - R[0]) };
+}
+S.zoneOf = zoneOf;
+// How lit a link's zone is, 0..1: how far past its own threshold, eased
+// in and out so a flicker of one update doesn't blink the map.
+const zoneK = {};
+let zoneT = performance.now();
+function updateZones() {
+  const now = performance.now(), dt = Math.min(0.2, (now - zoneT) / 1000); zoneT = now;
+  for (const l of (S.state && S.state.links) || []) {
+    const target = !l.stale && l.motion ? Math.min(1, 0.35 + 0.65 * (l.score - l.threshold) / Math.max(0.2, l.threshold)) : 0;
+    const cur = zoneK[l.mac] || 0;
+    zoneK[l.mac] = cur + (target - cur) * Math.min(1, dt / (target > cur ? 0.4 : 1.2));
+  }
+}
+const zoneLevel = (mac) => zoneK[mac] || 0;
+S.zoneLevel = zoneLevel;
 function distToSeg(p, a, b) {
   const [px, py] = p, [ax, ay] = a, [bx, by] = b;
   const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy;
@@ -117,6 +139,7 @@ function planChanged(auto) {
 // --------------------------------------------------------------- drawing ---
 function draw() {
   requestAnimationFrame(draw);
+  updateZones();
   if (S.view !== '2d') return;
   const r = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, r.width, r.height);
@@ -176,17 +199,31 @@ function draw() {
     ctx.fillText(Math.hypot(e[0] - wallStart[0], e[1] - wallStart[1]).toFixed(1) + ' m', (ax + bx) / 2 + 6, (ay + by) / 2 - 6);
   }
 
-  // the dot
-  const dot = S.state && S.state.dot;
-  if (dot && dot.placed && dot.intensity > 0.01) {
-    const [sx, sy] = toScreen(dot.x, dot.y);
-    const t = performance.now() / 1000;
-    const rad = scale * (0.6 + 0.5 * dot.intensity) * (1 + 0.06 * Math.sin(t * 4));
-    const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, rad);
-    g.addColorStop(0, `rgba(255,255,255,${0.95 * dot.intensity})`);
-    g.addColorStop(0.25, `rgba(127,243,255,${0.7 * dot.intensity})`);
-    g.addColorStop(1, 'rgba(127,243,255,0)');
-    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(sx, sy, rad, 0, Math.PI * 2); ctx.fill();
+  // movement zones: for every link that sees movement, a soft ellipse
+  // around its router-device line (roughly where a person would have to
+  // be to disturb it); overlapping zones add up and glow brighter. With a
+  // few links this is honestly all the position the data holds.
+  if (R) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const [mac, p] of Object.entries(S.plan.devices)) {
+      const k = zoneLevel(mac);
+      if (k < 0.02) continue;
+      const z = zoneOf(R, p);
+      const [cx, cy] = toScreen(z.cx, z.cy);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const dpr = window.devicePixelRatio || 1;
+      ctx.scale(dpr, dpr);
+      ctx.translate(cx, cy); ctx.rotate(z.angle); ctx.scale(z.a * scale, z.b * scale);
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+      g.addColorStop(0, `rgba(127,243,255,${0.55 * k})`);
+      g.addColorStop(0.6, `rgba(94,224,193,${0.25 * k})`);
+      g.addColorStop(1, 'rgba(94,224,193,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
   // devices
@@ -274,8 +311,39 @@ function zoomAt(px, py, f) {
   scale = Math.max(8, Math.min(400, scale * f));
   origin = { x: px - wx * scale, y: py - wy * scale };
 }
-$('zoomIn').onclick = () => { const r = canvas.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1.3); };
-$('zoomOut').onclick = () => { const r = canvas.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1 / 1.3); };
+function zoomButton(f) {
+  if (S.view === '3d') { if (S.zoom3d) S.zoom3d(f); return; }
+  const r = canvas.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, f);
+}
+$('zoomIn').onclick = () => zoomButton(1.3);
+$('zoomOut').onclick = () => zoomButton(1 / 1.3);
+// two-finger pinch on the 2D plan
+const touches = new Map();
+let pinch = null;
+canvas.addEventListener('pointerdown', (ev) => {
+  if (ev.pointerType !== 'touch') return;
+  touches.set(ev.pointerId, [ev.clientX, ev.clientY]);
+  if (touches.size === 2) {
+    const [p1, p2] = [...touches.values()];
+    pinch = { d: Math.hypot(p1[0] - p2[0], p1[1] - p2[1]) };
+    panning = null; dragging = null; wallStart = null;
+  }
+}, true);
+canvas.addEventListener('pointermove', (ev) => {
+  if (!touches.has(ev.pointerId)) return;
+  touches.set(ev.pointerId, [ev.clientX, ev.clientY]);
+  if (pinch && touches.size === 2) {
+    const [p1, p2] = [...touches.values()];
+    const d = Math.hypot(p1[0] - p2[0], p1[1] - p2[1]);
+    const r = canvas.getBoundingClientRect();
+    zoomAt((p1[0] + p2[0]) / 2 - r.left, (p1[1] + p2[1]) / 2 - r.top, d / pinch.d);
+    pinch.d = d;
+    ev.stopImmediatePropagation();
+  }
+}, true);
+const endTouch = (ev) => { touches.delete(ev.pointerId); if (touches.size < 2) pinch = null; };
+canvas.addEventListener('pointerup', endTouch, true);
+canvas.addEventListener('pointercancel', endTouch, true);
 $('zoomFit').onclick = () => { userMovedView = false; fit(); S.planListeners.forEach((f) => f('fit')); };
 
 // --------------------------------------------------------------- toolbar ---
@@ -364,7 +432,7 @@ function renderSummary() {
   const autoNote = S.plan.auto ? '<br><span style="color:#f2b35b">Placed automatically from signal strength. Click <b>Edit plan</b> to draw your walls and drag the router and devices to where they really are.</span>' : '';
   if (!live.length) { el.textContent = 'No capture data from the router.'; return; }
   if (live.every((l) => l.learning)) { el.textContent = 'Learning the normal signal level, about 10 seconds…'; return; }
-  el.innerHTML = (moving.length ? `<b>Motion</b> on ${moving.map((l) => escapeHtml(labelOf(l.mac))).join(', ')}` : 'Quiet: no movement') + autoNote;
+  el.innerHTML = (moving.length ? `<b>Motion</b> near the line to ${moving.map((l) => escapeHtml(labelOf(l.mac))).join(', ')}` : 'Quiet: no movement') + autoNote;
 }
 
 // ----------------------------------------------------------- auto layout ---

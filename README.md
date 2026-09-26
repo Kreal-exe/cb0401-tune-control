@@ -136,7 +136,7 @@ The router's Qualcomm Wi-Fi chips can measure CFR (Channel Frequency Response, Q
 
 The first time, click **Edit plan**, draw your walls (click corner to corner; the grid is 1 m), place the router, and place the devices that stay put (a TV, a desktop, a smart speaker, a robot vacuum on its dock). From then on:
 
-- every captured device's line to the router lights up when there's movement along it, and a dot glows in the middle of the lines that see movement, brighter the more there is. It means "somewhere around here": one link can't tell where along its line someone is, and a person standing perfectly still fades out after a while;
+- every captured device's line to the router lights up when there's movement along it, with a glowing zone around it; where zones of several links overlap, the glow adds up. That is the real resolution: one link can't tell where along its line someone is, so position gets finer only with more stationary devices spread around the home (a smart plug or a cheap always-on Wi-Fi board in each room adds a link). A person standing perfectly still fades out after a while;
 - devices you haven't placed (phones, laptops) show as a ring around the router at their estimated distance. That comes from signal strength alone, so it's distance, not direction, and walls make it rough;
 - there's a 2D plan and a 3D view with the walls extruded. Both work on a phone through the link.
 
