@@ -310,7 +310,8 @@ EOF
 #    With RUVIEW_VITALS_WITHOUT_CALIBRATION=1 (ruview.sh sets it unless you
 #    choose RUVIEW_CALIBRATE=1) it publishes whenever someone is detected
 #    and RuView's own quality gates still pass (signal quality >= 0.40,
-#    rate confidence >= 0.55), labelled "uncalibrated_estimate". Not
+#    rate confidence >= 0.35 here, RuView's default is 0.55, override with
+#    RUVIEW_VITALS_MIN_CONFIDENCE), labelled "uncalibrated_estimate". Not
 #    medical data: with several people in range it can be any of them.
 # 2. /api/v1/vital-signs also reports the candidate values RuView computed
 #    before those gates ("candidates"), so an empty readout says why.
@@ -349,11 +350,26 @@ edits = [
             "heartbeat_confidence": s.latest_vitals.heartbeat_confidence,
             "signal_quality": s.latest_vitals.signal_quality,
             "person_count": person_count,
-            "gates": {"min_signal_quality": VITAL_PUBLICATION_MIN_SIGNAL_QUALITY, "min_confidence": VITAL_PUBLICATION_MIN_CONFIDENCE},
+            "gates": {"min_signal_quality": VITAL_PUBLICATION_MIN_SIGNAL_QUALITY, "min_confidence": vitals_min_confidence()},
         },""", 1),
     ("update.persons = Some(tracked);",
      "update.persons = Some(cap_tracked_persons(tracked, update.estimated_persons));", None),
-    ("""fn vitals_for_publication(""", """// cb0401-tune-control patch: never more tracked skeletons than persons estimated
+    ("""        >= VITAL_PUBLICATION_MIN_CONFIDENCE)""", """        >= vitals_min_confidence())""", 1),
+    ("""        (candidates.heartbeat_confidence >= VITAL_PUBLICATION_MIN_CONFIDENCE)""", """        (candidates.heartbeat_confidence >= vitals_min_confidence())""", 1),
+    ("""fn vitals_for_publication(""", """// cb0401-tune-control patch: RUVIEW_VITALS_MIN_CONFIDENCE overrides the rate
+// confidence gate (default: RuView's own 0.55)
+fn vitals_min_confidence() -> f64 {
+    static MIN: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *MIN.get_or_init(|| {
+        std::env::var("RUVIEW_VITALS_MIN_CONFIDENCE")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v >= 0.0 && *v <= 1.0)
+            .unwrap_or(VITAL_PUBLICATION_MIN_CONFIDENCE)
+    })
+}
+
+// cb0401-tune-control patch: never more tracked skeletons than persons estimated
 fn cap_tracked_persons(mut tracked: Vec<PersonDetection>, estimated: Option<usize>) -> Vec<PersonDetection> {
     tracked.sort_by_key(|p| p.id);
     tracked.truncate(estimated.unwrap_or(1).max(1));
@@ -424,6 +440,12 @@ if [ "${RUVIEW_CALIBRATE:-0}" = 1 ]; then
   export RUVIEW_VITALS_WITHOUT_CALIBRATION=0
 else
   export RUVIEW_VITALS_WITHOUT_CALIBRATION=1
+  # RuView's rate-confidence gate is 0.55; live estimates here sat at
+  # 0.38-0.50 with plausible values (heart 76, breathing 10 per minute) and
+  # signal quality passing, so nothing was ever shown. In this uncalibrated
+  # mode show them from 0.35 up - they're labelled as estimates and the
+  # dashboards show the confidence next to them. Override as you like.
+  export RUVIEW_VITALS_MIN_CONFIDENCE="${RUVIEW_VITALS_MIN_CONFIDENCE:-0.35}"
 fi
 "$SENSING_SERVER_BIN" \
   --source esp32 \
