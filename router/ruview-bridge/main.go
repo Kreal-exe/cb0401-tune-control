@@ -581,7 +581,8 @@ func main() {
 	rotationSeconds := flag.Float64("rotation", 2, "seconds each router-side dump file covers (cfr_capture_daemon.sh POLL_SECONDS)")
 	maxNodeHz := flag.Float64("max-node-hz", 50, "frames per second per node sent to RuView at most; faster captures are amplitude-averaged down to this (RuView's vitals clamp each node to 50 Hz and size their windows from it)")
 	bandwidthMHz := flag.Uint("bandwidth-mhz", 80, "bandwidth of the captured radio, for the QCS1 header")
-	centerFreqMHz := flag.Uint("center-freq-mhz", 5180, "center frequency of the captured radio (channel 36 = 5180), for the frame header")
+	centerFreqMHz := flag.Uint("center-freq-mhz", 5180, "5 GHz radio's center frequency (channel 36 = 5180), for the frame header")
+	centerFreq2GMHz := flag.Uint("center-freq-2g-mhz", 2437, "2.4 GHz radio's center frequency (channel 6 = 2437), for frames from wifi0 dump files")
 	format := flag.String("format", "esp32", "UDP frame format: esp32 (feeds RuView's sensing pipeline), qcs1 (Qualcomm snapshot endpoint only), or both - see package doc")
 	flag.Parse()
 	if *format != "esp32" && *format != "qcs1" && *format != "both" {
@@ -663,7 +664,7 @@ func main() {
 				nd := nodeFor(u.mac, u.group[len(u.group)-1].rssiPerChain)
 				if nd == nil {
 					fmt.Fprintf(os.Stderr, "peer %s: more than 255 distinct peers, ESP32 node ids exhausted\n", u.mac)
-				} else if pkt, err := encodeESP32(u.group, nd, uint16(*centerFreqMHz)); err != nil {
+				} else if pkt, err := encodeESP32(u.group, nd, uint16(freqFor(u.radio, *centerFreqMHz, *centerFreq2GMHz))); err != nil {
 					skipped[u.mac+": "+err.Error()]++
 				} else if _, err := conn.Write(pkt); err != nil {
 					fmt.Fprintf(os.Stderr, "send %s: %v\n", u.mac, err)
@@ -705,8 +706,18 @@ func main() {
 // frameUnit is one frame to send: one or more consecutive records of a peer.
 type frameUnit struct {
 	mac   string
+	radio string // "wifi0" (2.4 GHz on this router) or "wifi1" (5 GHz), from the dump file name
 	group []rawRecord
 	pos   float64 // position on the capture timeline, in units of files
+}
+
+// freqFor picks the header frequency for a dump file's radio: wifi0 is the
+// 2.4 GHz radio on this router, wifi1 the 5 GHz one.
+func freqFor(radio string, freq5, freq2 uint) uint {
+	if radio == "wifi0" {
+		return freq2
+	}
+	return freq5
 }
 
 func radioOf(name string) string {
@@ -753,6 +764,7 @@ func planFrames(files []dumpFile, rotation time.Duration, maxHz float64) ([]fram
 				lo, hi := k*len(recs)/bins, (k+1)*len(recs)/bins
 				units = append(units, frameUnit{
 					mac:   mac,
+					radio: radio,
 					group: recs[lo:hi],
 					pos:   float64(idx) + (float64(k)+0.5)/float64(bins),
 				})

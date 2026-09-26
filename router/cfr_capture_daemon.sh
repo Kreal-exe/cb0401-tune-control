@@ -50,6 +50,7 @@
 #   PERIODICITY_MS=50
 #   MAX_PEERS=1
 #   PEERS="aa:bb:cc:dd:ee:ff 11:22:33:44:55:66"
+#   BAND=2.4   # 2.4, 5 or both (default): which radio(s) to capture on
 #
 # Station discovery uses `wlanconfig <vap> list sta`, not `iw dev <vap>
 # station dump` - confirmed live that this router's `iw` build reports zero
@@ -111,11 +112,28 @@ PERIODICITY_MS=20
 # live). One link to a device that stays put is what it can make sense of.
 MAX_PEERS=1
 PEERS=""
+BAND=both
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
 
-VAPS="wl0 wl1 wl13 wl5"
-RADIOS="wifi0 wifi1"
+ALL_VAPS="wl0 wl1 wl13 wl5"
+ALL_RADIOS="wifi0 wifi1"
+# VAPs and radios for BAND, from each VAP's live frequency and parent radio
+# rather than hard-coded (on the test router wifi0 = 2.4 GHz with wl1/wl13,
+# wifi1 = 5 GHz with wl0/wl5).
+VAPS=""
+RADIOS=""
+for v in $ALL_VAPS; do
+    ghz=$(iwconfig "$v" 2>/dev/null | sed -n 's/.*Frequency:\([0-9]\).*/\1/p')
+    case "$BAND:$ghz" in
+    both:* | 2.4:2 | 5:5) ;;
+    *) continue ;;
+    esac
+    VAPS="$VAPS $v"
+    r=$(cat "/sys/class/net/$v/parent" 2>/dev/null)
+    case " $RADIOS " in *" $r "*) ;; *) [ -n "$r" ] && RADIOS="$RADIOS $r" ;; esac
+done
+[ -n "$RADIOS" ] || RADIOS="$ALL_RADIOS"
 TIMER_PARAM=0x1194 # CFR global periodic timer enable, see cfr-trigger's package doc
 
 log() { echo "$(date '+%F %T') $*" >>"$LOG"; }
@@ -214,7 +232,7 @@ stop_readers() {
 }
 
 disable_timer() {
-    for r in $RADIOS; do
+    for r in $ALL_RADIOS; do
         [ -x "$TRIGGER" ] && "$TRIGGER" -iface "$r" -param "$TIMER_PARAM" -value 0 >>"$LOG" 2>&1
     done
     log "CFR periodic timer switched off"
@@ -260,7 +278,7 @@ stop_all_stations() {
 run_daemon() {
     echo $$ >"$PIDFILE"
     trap 'stop_readers; stop_all_captures; disable_timer; rm -f "$PIDFILE"; exit 0' TERM INT
-    log "daemon start: periodicity=${PERIODICITY_MS}ms max_peers=$MAX_PEERS pinned='$PEERS'"
+    log "daemon start: band=$BAND vaps=$VAPS radios=$RADIOS periodicity=${PERIODICITY_MS}ms max_peers=$MAX_PEERS pinned='$PEERS'"
     enable_timer
     stop_all_stations
     last=0
