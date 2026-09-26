@@ -45,9 +45,18 @@
 #      setup.sh already configured in gui/.env.
 #   8. Open the dashboard in your browser.
 #
-# Usage: ./ruview.sh [--local] [--no-router-install]
+# Usage: ./ruview.sh [--band 2.4|5|both] [--links N] [--calibrate]
+#                    [--local] [--no-router-install]
 #                    [--router-ip 192.168.31.1] [--router-key path/to/router_key]
 #                    [--env-file path/to/gui/.env]
+#
+#   --band 2.4|5|both  which Wi-Fi band to capture on (remembered on the router)
+#   --links N          how many connected devices to capture (default 2; picked
+#                      automatically: awake ones first, longest connected first;
+#                      remembered on the router)
+#   --calibrate        calibrate RuView right away - only with the room empty
+#                      for the next ~11 minutes; you get a message when done
+#   --local            no Cloudflare tunnel, nothing leaves this machine
 #
 set -e
 cd "$(dirname "$0")"
@@ -58,6 +67,9 @@ ROUTER_KEY=""
 ENV_FILE=""
 PUBLIC=1 # tunnel + link by default; --local keeps everything on this machine
 ROUTER_INSTALL=1
+SET_BAND=""
+SET_LINKS=""
+CALIBRATE_NOW=0
 while [ $# -gt 0 ]; do
   case "$1" in
   --router-ip) ROUTER_IP="$2"; shift 2 ;;
@@ -66,6 +78,13 @@ while [ $# -gt 0 ]; do
   --public) PUBLIC=1; shift ;; # the default; kept so older commands still work
   --local) PUBLIC=0; shift ;;
   --no-router-install) ROUTER_INSTALL=0; shift ;;
+  --band)
+    case "$2" in 2.4|5|both) SET_BAND="$2" ;; *) echo "--band must be 2.4, 5 or both" >&2; exit 2 ;; esac
+    shift 2 ;;
+  --links)
+    case "$2" in [1-4]) SET_LINKS="$2" ;; *) echo "--links must be 1-4" >&2; exit 2 ;; esac
+    shift 2 ;;
+  --calibrate) CALIBRATE_NOW=1; shift ;;
   -h|--help) sed -n '2,/^set -e/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d'; exit 0 ;;
   *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -239,6 +258,19 @@ if [ "$ROUTER_INSTALL" = 1 ]; then
       sed -i "/cfr_capture_daemon/d" /etc/crontabs/root
       /etc/init.d/cron restart >/dev/null 2>&1 || true
     fi'
+fi
+
+# --band / --links: remembered in the router's cfr_capture.conf, so later
+# runs need no flags. --links switches to automatic device choice (clears
+# pinned PEERS); edit the conf by hand to pin specific devices.
+if [ -n "$SET_BAND" ] || [ -n "$SET_LINKS" ]; then
+  conf_cmd="touch /etc/crontabs/patches/cfr_capture.conf"
+  [ -n "$SET_BAND" ] && conf_cmd="$conf_cmd; sed -i '/^BAND=/d' /etc/crontabs/patches/cfr_capture.conf; echo 'BAND=$SET_BAND' >> /etc/crontabs/patches/cfr_capture.conf"
+  [ -n "$SET_LINKS" ] && conf_cmd="$conf_cmd; sed -i '/^MAX_PEERS=/d; /^PEERS=/d' /etc/crontabs/patches/cfr_capture.conf; echo 'MAX_PEERS=$SET_LINKS' >> /etc/crontabs/patches/cfr_capture.conf"
+  ssh_router "$conf_cmd"
+fi
+if [ "$ROUTER_INSTALL" = 1 ]; then
+  echo "capture settings on the router: $(ssh_router "grep -E '^(BAND|MAX_PEERS|PEERS)=' /etc/crontabs/patches/cfr_capture.conf 2>/dev/null | tr '\n' ' '")"
   rm -rf "$TMP_DIR"
 fi
 
@@ -589,13 +621,20 @@ try: v=json.loads(sys.argv[1]).get(sys.argv[2])
 except Exception: v=None
 print("" if v is None else (str(v).lower() if isinstance(v,bool) else v))' "$1" "$2"; }
 
+# calibrate_loop [once]: "once" = calibrate right away (the room is empty
+# now - --calibrate), report, and stop; otherwise the announced 11.5-hourly
+# loop of RUVIEW_CALIBRATE=1.
 calibrate_loop() {
-  local base="http://127.0.0.1:$SERVER_PORT/api/v1" delay="${RUVIEW_CALIBRATION_DELAY:-120}"
+  local once="${1:-}" base="http://127.0.0.1:$SERVER_PORT/api/v1" delay="${RUVIEW_CALIBRATION_DELAY:-120}"
   local digest n1 n2 node st boot resp sess ok i fc mf el md
   digest="$(printf 'cb0401-ruview-%s' "$(hostname)" | { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-64)"
   while :; do
-    send_notice "RuView calibration" "hourglass" "In $((delay / 60)) min RuView calibrates the empty room for 10 min. Please leave the room then and keep it empty (people and pets) for about 11 minutes. I'll message when it's done." || true
-    sleep "$delay"
+    if [ "$once" = once ]; then
+      sleep 20 # let the nodes start streaming
+    else
+      send_notice "RuView calibration" "hourglass" "In $((delay / 60)) min RuView calibrates the empty room for 10 min. Please leave the room then and keep it empty (people and pets) for about 11 minutes. I'll message when it's done." || true
+      sleep "$delay"
+    fi
     n1="$(curl -s -m 5 "$base/nodes")"; sleep 15; n2="$(curl -s -m 5 "$base/nodes")"
     node="$(python3 - "$n1" "$n2" <<'EOF'
 import sys, json
@@ -612,6 +651,7 @@ EOF
 )"
     if [ -z "$node" ]; then
       send_notice "RuView calibration" "warning" "No node is streaming steadily enough (>= 10 frames/s) to calibrate on - retrying in 5 min." || true
+      [ "$once" = once ] && return 1
       sleep 300; continue
     fi
     st="$(curl -s -m 5 "$base/calibration/status")"; boot="$(jfield "$st" boot_epoch)"
@@ -621,6 +661,7 @@ EOF
     ok="$(jfield "$resp" success)"; sess="$(jfield "$resp" session_id)"; boot="$(jfield "$resp" boot_epoch)"
     if [ "$ok" != "true" ] || [ -z "$sess" ]; then
       send_notice "RuView calibration" "warning" "Couldn't start calibration on node $node: $(jfield "$resp" error_code) $(jfield "$resp" error)$(jfield "$resp" message) - retrying in 5 min." || true
+      [ "$once" = once ] && return 1
       sleep 300; continue
     fi
     send_notice "RuView calibration" "hourglass" "Calibrating now on node $node - keep the room empty for 10 minutes." || true
@@ -635,16 +676,29 @@ EOF
     resp="$(curl -s -m 20 -X POST "$base/calibration/stop" -H 'content-type: application/json' \
       -d "{\"boot_epoch\":\"$boot\",\"session_id\":\"$sess\",\"binding_digest\":\"$digest\",\"source_node_ids\":[$node]}")"
     if [ "$(jfield "$resp" success)" = "true" ]; then
+      if [ "$once" = once ]; then
+        send_notice "RuView calibration" "white_check_mark" "Calibrated on node $node - you can go back into the room. Valid for 12 h or until ruview.sh restarts." || true
+        return 0
+      fi
       send_notice "RuView calibration" "white_check_mark" "Calibrated on node $node. For the next 12 h RuView shows breathing and heart rate when exactly one person is in the room (Sensing tab). It recalibrates automatically in 11.5 h - you'll get a heads-up first." || true
       sleep 41400
     else
       send_notice "RuView calibration" "warning" "Calibration didn't finish ($(jfield "$resp" error_code) $(jfield "$resp" error)$(jfield "$resp" message); frames $fc/$mf, ${el}/${md} s) - retrying in 5 min." || true
+      [ "$once" = once ] && return 1
       sleep 300
     fi
   done
 }
 
-if [ "${RUVIEW_CALIBRATE:-0}" = 1 ]; then
+if [ "$CALIBRATE_NOW" = 1 ] && [ "${RUVIEW_CALIBRATE:-0}" != 1 ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    calibrate_loop once >>/tmp/ruview-calibration.log 2>&1 &
+    PIDS="$PIDS $!"
+    echo "Calibrating now - keep the room empty for about 11 minutes; you'll get a message when it's done (log: /tmp/ruview-calibration.log)."
+  else
+    echo "python3 not found - can't run the calibration."
+  fi
+elif [ "${RUVIEW_CALIBRATE:-0}" = 1 ]; then
   if command -v python3 >/dev/null 2>&1; then
     calibrate_loop >>/tmp/ruview-calibration.log 2>&1 &
     PIDS="$PIDS $!"
@@ -653,7 +707,7 @@ if [ "${RUVIEW_CALIBRATE:-0}" = 1 ]; then
     echo "python3 not found - skipping automatic calibration (RuView won't show breathing/heart rate without it)."
   fi
 else
-  echo "Vitals: published without empty-room calibration (uncalibrated estimates). RUVIEW_CALIBRATE=1 switches to RuView's strict calibrated mode."
+  echo "Vitals: published as uncalibrated estimates. Run with --calibrate when the room is empty to calibrate RuView."
 fi
 
 # shellcheck disable=SC2086

@@ -48,7 +48,7 @@
 # /etc/crontabs/patches/cfr_capture.conf:
 #
 #   PERIODICITY_MS=50
-#   MAX_PEERS=1
+#   MAX_PEERS=2
 #   PEERS="aa:bb:cc:dd:ee:ff 11:22:33:44:55:66"
 #   BAND=2.4   # 2.4, 5 or both (default): which radio(s) to capture on
 #
@@ -104,13 +104,12 @@ NO_CONSUMER_SECONDS=60
 # ruview-bridge amplitude-averages the excess down to 50 Hz per node,
 # trading bandwidth for less noise.
 PERIODICITY_MS=20
-# One link by default. RuView models every node as a fixed sensor at a
-# known spot; several of our links (to devices that move around, sleep and
-# sit wherever) made it fuse nonsense - 4-5 phantom skeletons with ids
-# churning every few frames while it estimated 1 person, and a vitals
-# readout that followed whichever link sent the last frame (confirmed
-# live). One link to a device that stays put is what it can make sense of.
-MAX_PEERS=1
+# Two links by default: movement is seen along each link's path, so two
+# stationary, awake devices in different directions cover more of the room
+# (ruview.sh --links changes it). More isn't better: RuView fuses nodes as
+# fixed sensors at known spots, and many links to devices that move or
+# sleep made it produce phantom skeletons (seen with 3-5, confirmed live).
+MAX_PEERS=2
 PEERS=""
 BAND=both
 # shellcheck disable=SC1090
