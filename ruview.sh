@@ -39,13 +39,13 @@
 #   6. Start ruview-bridge, which pulls raw CFR dumps off the router over
 #      SSH, converts real (non-empty) records to RuView's "QCS1" wire
 #      format, and forwards them to sensing-server's UDP listener.
-#   7. With --public: put the dashboard behind ruview-proxy, open a
+#   7. Unless --local: put the dashboard behind ruview-proxy, open a
 #      Cloudflare quick tunnel to it, and send yourself the resulting link
 #      (with a one-off access key) through the ntfy/Telegram backend
 #      setup.sh already configured in gui/.env.
 #   8. Open the dashboard in your browser.
 #
-# Usage: ./ruview.sh [--public] [--no-router-install]
+# Usage: ./ruview.sh [--local] [--no-router-install]
 #                    [--router-ip 192.168.31.1] [--router-key path/to/router_key]
 #                    [--env-file path/to/gui/.env]
 #
@@ -56,14 +56,15 @@ REPO_DIR="$(pwd)"
 ROUTER_IP="${ROUTER_IP:-192.168.31.1}"
 ROUTER_KEY=""
 ENV_FILE=""
-PUBLIC=0
+PUBLIC=1 # tunnel + link by default; --local keeps everything on this machine
 ROUTER_INSTALL=1
 while [ $# -gt 0 ]; do
   case "$1" in
   --router-ip) ROUTER_IP="$2"; shift 2 ;;
   --router-key) ROUTER_KEY="$2"; shift 2 ;;
   --env-file) ENV_FILE="$2"; shift 2 ;;
-  --public) PUBLIC=1; shift ;;
+  --public) PUBLIC=1; shift ;; # the default; kept so older commands still work
+  --local) PUBLIC=0; shift ;;
   --no-router-install) ROUTER_INSTALL=0; shift ;;
   -h|--help) sed -n '2,/^set -e/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d'; exit 0 ;;
   *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -121,7 +122,7 @@ if ! command -v go >/dev/null 2>&1; then
   exit 1
 fi
 if [ "$PUBLIC" = 1 ] && ! command -v cloudflared >/dev/null 2>&1; then
-  echo "--public needs cloudflared (Cloudflare's tunnel client) and it isn't installed." >&2
+  echo "The public link needs cloudflared (Cloudflare's tunnel client) and it isn't installed." >&2
   echo "macOS: brew install cloudflared   Linux/other: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/" >&2
   exit 1
 fi
@@ -300,28 +301,34 @@ open(p, "w").write(s.replace(old_close, new_close).replace(old_none, new_none))
 print("Observatory reconnect patch applied")
 EOF
 
-# Second local patch, to sensing-server itself (src/main.rs): an opt-in
-# way to publish breathing/heart rate WITHOUT RuView's explicit
-# calibration. Upstream publishes them only after a 10-minute calibration
-# on a completely empty room, and only while it then counts exactly one
-# person. At a router by a window - people passing outside, other people
-# at home - neither condition can ever hold, so the numbers never appear.
-# With RUVIEW_VITALS_WITHOUT_CALIBRATION=1 (ruview.sh sets it unless you
-# choose RUVIEW_CALIBRATE=1) it publishes whenever someone is detected and
-# RuView's own quality gates still pass (signal quality >= 0.40, rate
-# confidence >= 0.55), and labels them "uncalibrated_estimate" instead of
-# "explicit_calibration" in /api/v1/vital-signs. Not medical data: with
-# several people in range the estimate can come from any of them.
-python3 - "$RUVIEW_DIR/v2/crates/wifi-densepose-sensing-server/src/main.rs" <<'EOF' || echo "(vitals-without-calibration patch not applied)"
+# Second local patch, to sensing-server itself (src/main.rs). Three parts:
+#
+# 1. Vitals without an empty room. Upstream publishes breathing/heart rate
+#    only after a 10-minute calibration on a completely empty room, and
+#    only while it then counts exactly one person. At a router by a window
+#    - people passing outside, other people at home - that can never hold.
+#    With RUVIEW_VITALS_WITHOUT_CALIBRATION=1 (ruview.sh sets it unless you
+#    choose RUVIEW_CALIBRATE=1) it publishes whenever someone is detected
+#    and RuView's own quality gates still pass (signal quality >= 0.40,
+#    rate confidence >= 0.55), labelled "uncalibrated_estimate". Not
+#    medical data: with several people in range it can be any of them.
+# 2. /api/v1/vital-signs also reports the candidate values RuView computed
+#    before those gates ("candidates"), so an empty readout says why.
+# 3. Never more skeletons than persons estimated. RuView's pose tracker
+#    splits one procedural pose into several tracks at the ~10-50 Hz this
+#    source updates at: the Observatory drew 3 frozen figures side by side
+#    while the server itself estimated 1 person (confirmed live). The
+#    oldest (most stable) tracks are kept, up to estimated_persons.
+python3 - "$RUVIEW_DIR/v2/crates/wifi-densepose-sensing-server/src/main.rs" <<'EOF' || echo "(sensing-server patch not applied)"
 import sys
 p = sys.argv[1]
 s = open(p).read()
 if "cb0401-tune-control patch" in s:
     sys.exit(0)
-old_gate = """    if !explicit_calibration_fresh || person_count != 1 {
+edits = [
+    ("""    if !explicit_calibration_fresh || person_count != 1 {
         return None;
-    }"""
-new_gate = """    // cb0401-tune-control patch: opt-in publication without explicit calibration
+    }""", """    // cb0401-tune-control patch: opt-in publication without explicit calibration
     static WITHOUT_CALIBRATION: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let without_calibration = *WITHOUT_CALIBRATION.get_or_init(|| {
         std::env::var("RUVIEW_VITALS_WITHOUT_CALIBRATION").map(|v| v == "1").unwrap_or(false)
@@ -332,14 +339,38 @@ new_gate = """    // cb0401-tune-control patch: opt-in publication without expli
         }
     } else if !explicit_calibration_fresh || person_count != 1 {
         return None;
-    }"""
-old_label = """        "authority": if published.is_some() { "explicit_calibration" } else { "abstained" },"""
-new_label = """        "authority": if published.is_none() { "abstained" } else if explicit_calibration_fresh { "explicit_calibration" } else { "uncalibrated_estimate" },"""
-if s.count(old_gate) != 1 or s.count(old_label) != 1:
-    print("sensing-server source changed upstream - vitals-without-calibration patch not applied")
-    sys.exit(0)
-open(p, "w").write(s.replace(old_gate, new_gate).replace(old_label, new_label))
-print("vitals-without-calibration patch applied")
+    }""", 1),
+    ("""        "authority": if published.is_some() { "explicit_calibration" } else { "abstained" },""",
+     """        "authority": if published.is_none() { "abstained" } else if explicit_calibration_fresh { "explicit_calibration" } else { "uncalibrated_estimate" },
+        "candidates": {
+            "breathing_rate_bpm": s.latest_vitals.breathing_rate_bpm,
+            "heart_rate_bpm": s.latest_vitals.heart_rate_bpm,
+            "breathing_confidence": s.latest_vitals.breathing_confidence,
+            "heartbeat_confidence": s.latest_vitals.heartbeat_confidence,
+            "signal_quality": s.latest_vitals.signal_quality,
+            "person_count": person_count,
+            "gates": {"min_signal_quality": VITAL_PUBLICATION_MIN_SIGNAL_QUALITY, "min_confidence": VITAL_PUBLICATION_MIN_CONFIDENCE},
+        },""", 1),
+    ("update.persons = Some(tracked);",
+     "update.persons = Some(cap_tracked_persons(tracked, update.estimated_persons));", None),
+    ("""fn vitals_for_publication(""", """// cb0401-tune-control patch: never more tracked skeletons than persons estimated
+fn cap_tracked_persons(mut tracked: Vec<PersonDetection>, estimated: Option<usize>) -> Vec<PersonDetection> {
+    tracked.sort_by_key(|p| p.id);
+    tracked.truncate(estimated.unwrap_or(1).max(1));
+    tracked
+}
+
+fn vitals_for_publication(""", 1),
+]
+for old, new, count in edits:
+    n = s.count(old)
+    if n == 0 or (count is not None and n != count):
+        print("sensing-server source changed upstream - local patch not applied")
+        sys.exit(0)
+for old, new, count in edits:
+    s = s.replace(old, new)
+open(p, "w").write(s)
+print("sensing-server patch applied")
 EOF
 
 say "Building RuView's sensing-server (this compiles a large third-party Rust workspace - first run takes a while)"
@@ -450,7 +481,7 @@ trap cleanup EXIT INT TERM
 # port never serves - and silently falls back to its demo generator
 # (confirmed live on http://localhost:3000/ui/observatory.html). Behind the
 # proxy every page finds the stream on the origin it came from. With
-# --public the same proxy also serves the key-gated tunnel side.
+# the public link (the default) the same proxy also serves the key-gated tunnel side.
 ACCESS_KEY=""
 PROXY_ARGS=(-local "127.0.0.1:$HTTP_PORT" -http "127.0.0.1:$SERVER_PORT" -ws "127.0.0.1:$WS_PORT")
 if [ "$PUBLIC" = 1 ]; then
