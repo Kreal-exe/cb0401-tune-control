@@ -333,10 +333,33 @@ new_msg = """      // cb0401-tune-control patch: hold the last vitals (5 s) and 
       // the latest made the panel read "--" and the figure flicker.
       this._ws.onmessage = (evt) => { try {
         const d = JSON.parse(evt.data); const now = performance.now();
-        if (d.vital_signs) { this._heldVitals = d.vital_signs; this._heldVitalsAt = now; }
+        const present = !!(d.classification && d.classification.presence);
+        if (!present) { this._heldVitals = null; delete d.vital_signs; } // no one there: no rates, whatever the estimator says
+        else if (d.vital_signs) { this._heldVitals = d.vital_signs; this._heldVitalsAt = now; }
         else if (this._heldVitals && now - this._heldVitalsAt < 5000) d.vital_signs = this._heldVitals;
         if (d.persons && d.persons.length) { this._heldPersons = d.persons; this._heldPersonsAt = now; }
         else if (this._heldPersons && now - this._heldPersonsAt < 1500 && d.classification && d.classification.presence) d.persons = this._heldPersons;
+        // Figure placement. Upstream puts it at the brightest cell of a
+        // synthetic field rebuilt from whichever node sent the last frame
+        // (~94 times a second, unsmoothed), so it jumped ~3 m back and forth.
+        // That position isn't a measurement (one link can't give x/z; the
+        // server's field_localize.rs says so). Instead: stand between the
+        // two links and lean, smoothed over ~2.5 s, toward the one whose
+        // motion is furthest above its own recent level. Honest for 2 links.
+        const nf = (d.node_features || []).slice().sort((a, b) => a.node_id - b.node_id);
+        const dt = Math.min(0.5, (now - (this._lastMsgAt || now)) / 1000); this._lastMsgAt = now;
+        this._slow = this._slow || {}; const ex = [];
+        for (const n of nf.slice(0, 2)) {
+          const m = (n.features && n.features.motion_band_power) || 0;
+          const base = this._slow[n.node_id] === undefined ? m : this._slow[n.node_id];
+          this._slow[n.node_id] = base + (m - base) * Math.min(1, dt / 30);
+          ex.push(Math.max(0, m / (base + 1e-9) - 1));
+        }
+        const target = ex.length === 2 && ex[0] + ex[1] > 0.05 ? ex[0] / (ex[0] + ex[1]) : 0.5;
+        this._lean = this._lean === undefined ? 0.5 : this._lean + (target - this._lean) * Math.min(1, dt / 2.5);
+        if (d.persons && d.persons.length) {
+          d.persons = [Object.assign({}, d.persons[0], { position: [1.5 - 3 * this._lean, 0, 0] })];
+        }
         this._liveData = d;
       } catch {} };"""
 if old_close not in s or old_none not in s or old_msg not in s:
@@ -358,6 +381,8 @@ EOF
 #    rate confidence >= 0.35 here, RuView's default is 0.55, override with
 #    RUVIEW_VITALS_MIN_CONFIDENCE), labelled "uncalibrated_estimate". Not
 #    medical data: with several people in range it can be any of them.
+#    Once an explicit calibration is fresh (ruview.sh --calibrate), RuView's
+#    own rule applies again: numbers only while it counts exactly one person.
 # 2. /api/v1/vital-signs also reports the candidate values RuView computed
 #    before those gates ("candidates"), so an empty readout says why.
 # 3. Never more skeletons than persons estimated. RuView's pose tracker
@@ -379,7 +404,7 @@ edits = [
     let without_calibration = *WITHOUT_CALIBRATION.get_or_init(|| {
         std::env::var("RUVIEW_VITALS_WITHOUT_CALIBRATION").map(|v| v == "1").unwrap_or(false)
     });
-    if without_calibration {
+    if without_calibration && !explicit_calibration_fresh {
         if person_count == 0 {
             return None;
         }
