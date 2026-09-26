@@ -161,7 +161,7 @@ say "Building the motion map"
 PIDS=""
 CAPTURE_STARTED=0
 cleanup() {
-  trap - EXIT INT TERM
+  trap - EXIT INT TERM HUP
   echo
   echo "Stopping..."
   # shellcheck disable=SC2086
@@ -172,7 +172,7 @@ cleanup() {
       || echo "(couldn't reach the router to stop capture - it stops by itself within a minute, as nothing collects it)"
   fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT INT TERM HUP # HUP: the terminal window was closed
 
 say "Starting capture on the router"
 ssh_router 'sh /etc/crontabs/patches/cfr_capture_daemon.sh --ensure' || { echo "Couldn't start CFR capture on the router." >&2; exit 1; }
