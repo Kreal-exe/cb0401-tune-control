@@ -21,7 +21,7 @@
 #      setup.sh configured in gui/.env.
 #
 # Usage: ./sensing.sh [--band 2.4|5|both] [--links N] [--local]
-#                     [--threshold 0.4] [--no-router-install]
+#                     [--threshold 3] [--no-router-install]
 #                     [--router-ip 192.168.31.1] [--router-key path] [--env-file path]
 #
 #   --band 2.4|5|both  Wi-Fi band to capture on (remembered on the router)
@@ -29,7 +29,7 @@
 #                      automatically: awake first, longest connected first)
 #   --local            no tunnel - nothing leaves this machine
 #   --threshold X      how far above its normal level a link must go to
-#                      count as movement (0.4 = 40%, the default)
+#                      count as movement, in dB (default 3)
 #
 set -e
 cd "$(dirname "$0")"
@@ -42,7 +42,7 @@ PUBLIC=1
 ROUTER_INSTALL=1
 SET_BAND=""
 SET_LINKS=""
-THRESHOLD="0.4"
+THRESHOLD="3"
 HTTP_PORT="${SENSING_PORT:-3000}"
 PUBLIC_PORT="${SENSING_PUBLIC_PORT:-3080}"
 while [ $# -gt 0 ]; do

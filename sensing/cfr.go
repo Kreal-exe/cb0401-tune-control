@@ -7,13 +7,13 @@ package main
 
 import (
 	"encoding/binary"
-	"math"
 	"net"
 )
 
 var magicHeader = [4]byte{0xaf, 0xbe, 0xad, 0xde} // 0xDEADBEAF on disk
 
 const (
+	offTimestamp      = 0x1e // u64 LE capture time in microseconds (router clock)
 	offMAC            = 0x2c // peer MAC address (6 bytes)
 	fixedHdrLen       = 0x32
 	successPayloadOff = 0xc0 // I/Q pairs start here in a successful record
@@ -22,6 +22,7 @@ const (
 
 type rawRecord struct {
 	mac     string
+	ts      uint64 // capture time, microseconds on the router's clock
 	rssi    int8   // strongest chain's RSSI in dBm, 0 if unknown
 	payload []byte // I/Q region, from successPayloadOff to the end
 }
@@ -84,6 +85,7 @@ func splitRecords(buf []byte) []rawRecord {
 			}
 		}
 		records = append(records, rawRecord{
+			ts:      binary.LittleEndian.Uint64(body[offTimestamp:]),
 			mac:     net.HardwareAddr(body[offMAC : offMAC+6]).String(),
 			rssi:    rssi,
 			payload: body[successPayloadOff:],
@@ -114,16 +116,17 @@ var cfrLayouts = []cfrLayout{
 	{pairs: 217, chains: 2, block: 108, first: 1, toneLo: 53, toneHi: 106, dc: 79},
 }
 
-// toneAmplitudes returns the per-tone amplitudes of one record, chain by
-// chain (chains x 52 values), or nil for an unmapped record size. Phase is
-// ignored: every CFR snapshot carries its own random phase offset.
-func toneAmplitudes(rec rawRecord) []float64 {
+// toneCSI returns the complex channel of one record, chain by chain
+// (chains x 52 values), and the number of chains; nil for an unmapped record
+// size. Each record carries its own random phase and timing offset, common
+// to all chains - see csi.go for how that is removed.
+func toneCSI(rec rawRecord) ([]complex128, int) {
 	n := len(rec.payload) / 4
 	for _, l := range cfrLayouts {
 		if n != l.pairs {
 			continue
 		}
-		out := make([]float64, 0, l.chains*(l.toneHi-l.toneLo-1))
+		out := make([]complex128, 0, l.chains*(l.toneHi-l.toneLo-1))
 		for c := 0; c < l.chains; c++ {
 			base := l.first + c*l.block
 			for t := l.toneLo; t < l.toneHi; t++ {
@@ -133,10 +136,10 @@ func toneAmplitudes(rec rawRecord) []float64 {
 				k := (base + t) * 4
 				i := float64(int16(binary.LittleEndian.Uint16(rec.payload[k:])))
 				q := float64(int16(binary.LittleEndian.Uint16(rec.payload[k+2:])))
-				out = append(out, math.Hypot(i, q))
+				out = append(out, complex(i, q))
 			}
 		}
-		return out
+		return out, l.chains
 	}
-	return nil
+	return nil, 0
 }

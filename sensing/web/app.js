@@ -369,7 +369,38 @@ function stateText(l, st) {
   if (st && !st.captured && !l) return ['not captured', ''];
   if (!l || l.stale) return ['no data', ''];
   if (l.learning) return ['learning…', ''];
-  return l.motion ? ['motion', 'motion'] : ['quiet', 'quiet'];
+  if (!l.motion) return ['quiet', 'quiet'];
+  return [l.speed > 0 ? `motion · ${l.speed.toFixed(1)} m/s` : 'motion', 'motion'];
+}
+
+// Doppler history per link: how fast the moving reflection's path length
+// changes, over the last ~18 s, drawn as a small waterfall under the device.
+const DOP_KEEP = 60;
+S.dopHist = {};
+function recordDoppler(st) {
+  for (const l of st.links || []) {
+    if (!l.doppler || l.stale) continue;
+    const h = (S.dopHist[l.mac] = S.dopHist[l.mac] || []);
+    h.push(l.doppler);
+    if (h.length > DOP_KEEP) h.shift();
+  }
+}
+function drawDoppler(cv, hist) {
+  const w = cv.clientWidth || 240, h = 44;
+  cv.width = w; cv.height = h;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#0b0f14'; g.fillRect(0, 0, w, h);
+  const cw = w / DOP_KEEP, off = DOP_KEEP - hist.length;
+  hist.forEach((col, i) => {
+    const rh = h / col.length;
+    col.forEach((db, j) => {
+      const k = Math.max(0, Math.min(1, db / 20));
+      if (k < 0.05) return;
+      g.fillStyle = `rgba(${Math.round(94 + 150 * k)},${Math.round(224 + 29 * k)},${Math.round(193 + 62 * k)},${k})`;
+      g.fillRect((off + i) * cw, h - (j + 1) * rh, Math.ceil(cw), Math.ceil(rh));
+    });
+  });
+  g.strokeStyle = 'rgba(255,255,255,0.12)'; g.beginPath(); g.moveTo(0, h / 2); g.lineTo(w, h / 2); g.stroke();
 }
 function renderDevices() {
   const ul = $('devices');
@@ -387,6 +418,12 @@ function renderDevices() {
       <div class="dev-meta">${meta}</div>
       <div class="bar"><i style="width:${l && !l.stale ? Math.min(100, l.score / (2 * l.threshold) * 100) : 0}%"></i></div>`;
     li.querySelector('.dev-name').textContent = labelOf(mac);
+    if (l && !l.stale && S.dopHist[mac]) {
+      const wrap = document.createElement('div'); wrap.className = 'dop';
+      wrap.innerHTML = '<canvas></canvas><span class="dop-l">+2.5 m/s</span><span class="dop-l dop-b">−2.5</span>';
+      li.append(wrap);
+      requestAnimationFrame(() => drawDoppler(wrap.firstChild, S.dopHist[mac]));
+    }
     if (editing) {
       const acts = document.createElement('div'); acts.className = 'dev-actions';
       const place = document.createElement('button');
@@ -420,6 +457,7 @@ function renderSummary() {
 // through the Cloudflare tunnel - it buffers the response.)
 function applyState(st) {
   S.state = st;
+  recordDoppler(st);
   const pill = $('status');
   if (st.receiving) { pill.textContent = 'live'; pill.className = 'pill ok'; }
   else { pill.textContent = st.error ? 'router unreachable' : 'no capture data'; pill.className = 'pill bad'; }

@@ -70,3 +70,8 @@ aside h2 { font-size: 14px; margin: 4px 0 8px; }
 .rec-labels button { padding: 10px 8px; font-size: 13px; }
 .rec-labels button:disabled { opacity: 0.4; cursor: default; }
 #recToggle.on { background: #3a1818; border-color: #e0605e; color: #ff8a88; }
+
+.dop { position: relative; margin-top: 6px; }
+.dop canvas { display: block; width: 100%; height: 44px; border-radius: 4px; }
+.dop-l { position: absolute; right: 4px; top: 1px; font-size: 9px; color: #6b7a8a; pointer-events: none; }
+.dop-l.dop-b { top: auto; bottom: 1px; }

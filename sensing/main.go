@@ -278,8 +278,16 @@ func main() {
 	accessKey := flag.String("access-key", "", "access key for -public")
 	planPath := flag.String("plan", "data/plan.json", "where the floor plan is stored")
 	rotation := flag.Duration("rotation", 2*time.Second, "how long each router dump file covers (cfr_capture_daemon.sh POLL_SECONDS)")
-	threshold := flag.Float64("threshold", 0.4, "motion threshold: how far above its own normal level a link must be (0.4 = 40%)")
+	threshold := flag.Float64("threshold", 3, "motion threshold: how many dB above its own normal level a link must be")
+	replayDir := flag.String("replay", "", "analyse saved capture files in this directory, print the result and exit")
 	flag.Parse()
+	if *replayDir != "" {
+		if err := replay(*replayDir, *threshold, *rotation); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if *keyPath == "" {
 		fmt.Fprintln(os.Stderr, "usage: sensing -key path/to/router_key [-host root@192.168.31.1] [-listen 127.0.0.1:3000]")
 		os.Exit(2)
