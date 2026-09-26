@@ -12,7 +12,9 @@ router/sms-reader/dist/
 router/sms-reader-arm
 router/cfr-trigger/dist/
 router/cfr-trigger-arm
-router/cfr-to-rvcsi/cfr-to-rvcsi
+sensing/sensing
+# motion map floor plan (your own, local)
+/data/
 
 # Local backups you may have made of your router
 backups/

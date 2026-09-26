@@ -3,16 +3,14 @@
 # Keeps *periodic* CFR (Channel Frequency Response - Qualcomm's per-peer
 # Wi-Fi channel-state capture, the vendor equivalent of "CSI") running for
 # a few of the currently associated Wi-Fi clients - the router-side half of
-# the RuView integration (see ../router/cfr-trigger and ../router/
-# ruview-bridge for the rest and how the formats were reverse-engineered).
+# the motion map (../sensing.sh; see ../router/cfr-trigger for how capture
+# is switched on and ../sensing/cfr.go for the record format).
 #
 # # Periodic, not one-shot (and what it took)
 #
 # Earlier versions re-armed a one-shot capture per client every few
-# seconds: ~1 frame per client per cycle. RuView's vital-sign estimation
-# wants a real sample stream (its own ESP32 nodes send 20-100 Hz; the
-# heartbeat band-pass alone needs a few Hz), so that could never do more
-# than presence/motion. The firmware's periodic mode (a capture every N ms
+# seconds: ~1 frame per client per cycle, too sparse to see movement as it
+# happens. The firmware's periodic mode (a capture every N ms
 # per peer, driven by the firmware itself with QoS-null/ACK exchanges,
 # nothing the peer has to cooperate with) refused to start: "Global
 # periodic timer is not enabled, configure global cfr timer". The setter
@@ -38,8 +36,8 @@
 # # Which clients
 #
 # Not all of them: every periodic peer costs airtime and ~170 KB/s of
-# dump data at 20 Hz (which ruview-bridge then pulls over SSH), and two
-# or three well-placed, awake devices are what sensing wants anyway. Up to
+# dump data at 20 Hz on 5 GHz (which the motion map pulls over SSH), and a
+# few well-placed, awake, stationary devices are what sensing wants. Up to
 # MAX_PEERS are chosen every RECONCILE_SECONDS: pinned PEERS first (if
 # associated), then clients not in power save, longest-associated first
 # (the strongest signal is a bad criterion: on the test network it picked
@@ -48,8 +46,9 @@
 # /etc/crontabs/patches/cfr_capture.conf:
 #
 #   PERIODICITY_MS=50
-#   MAX_PEERS=1
+#   MAX_PEERS=4
 #   PEERS="aa:bb:cc:dd:ee:ff 11:22:33:44:55:66"
+#   BAND=2.4   # 2.4, 5 or both (default): which radio(s) to capture on
 #
 # Station discovery uses `wlanconfig <vap> list sta`, not `iw dev <vap>
 # station dump` - confirmed live that this router's `iw` build reports zero
@@ -62,14 +61,16 @@
 # The captured records only reach userspace through /usr/sbin/cfr_test_app
 # (the stock debugfs reader), which writes /tmp/cfr_dump_wifi{0,1}_<ts>.bin
 # for as long as it runs. One reader per radio is restarted every
-# POLL_SECONDS purely to rotate files (ruview-bridge takes complete files
+# POLL_SECONDS purely to rotate files (the motion map takes complete files
 # and deletes them; /tmp is RAM). Exactly one reader per radio at a time:
 # two readers on the same radio split the stream between them (confirmed
-# live - counts halved and worse). This daemon does not convert anything
-# itself; that's ruview-bridge's job on the host running RuView.
+# live - counts halved and worse). This daemon doesn't analyse anything
+# itself; the motion map does, on the computer running sensing.sh.
 #
 # Modes: same --daemon/--ensure/--stop/--restart convention as
 # command_watcher.sh/sms_notify.sh. No argument = one reconcile pass.
+# Not started from cron: sensing.sh runs it with --ensure while the map
+# runs and --stop on exit (which also switches the timer off).
 #
 DIR=/etc/crontabs/patches
 TRIGGER="$DIR/cfr-trigger"
@@ -80,29 +81,51 @@ STATE=/tmp/cfr_periodic_armed.txt # "vap mac" per line: what this daemon has sta
 CONF="$DIR/cfr_capture.conf"
 POLL_SECONDS=2       # reader window = dump file rotation period
 RECONCILE_SECONDS=10 # how often the peer selection is re-evaluated
-# 20 ms -> ~46-50 Hz per peer: RuView's own ceiling. Its per-node vitals
-# detector clamps the sample rate to 50 Hz and sizes its 30 s / 15 s
-# breathing/heart windows from that, so feeding more per node would
-# squeeze those windows and skew the rates. The firmware goes further
-# (measured: 10 ms -> 63 Hz, 5 ms -> 116 Hz, 1 ms -> ~245 Hz on one
-# peer, ~560 records/s summed over three), but the SSH link to the host
-# tops out around 4 MB/s (~490 records/s at 8.4 KB each). Lower this and
-# ruview-bridge amplitude-averages the excess down to 50 Hz per node,
-# trading bandwidth for less noise.
+# Backlog cap. The dump files go to /tmp, which is RAM (tmpfs) on this
+# router: 405 MB total, ~175 MB free, no swap. At 20 ms one client alone
+# writes ~390 KB/s, so with nobody collecting (the motion map not running -
+# e.g. the Mac asleep or rebooted) RAM ran out in about 8 minutes and the
+# router went down - it rebooted every ~13 minutes on 2026-09-26 while this
+# daemon kept capturing with no consumer. Now: never keep more than
+# MAX_BACKLOG_KB of uncollected files (oldest are dropped), and if the
+# backlog stays over the cap for NO_CONSUMER_SECONDS, nobody is reading -
+# stop capturing altogether and switch the timer off.
+MAX_BACKLOG_KB=16384
+NO_CONSUMER_SECONDS=60
+# 20 ms -> ~46-50 captures/s per peer, the rate the motion metric was
+# validated at. The firmware goes further (measured: 10 ms -> 63 Hz,
+# 5 ms -> 116 Hz, 1 ms -> ~245 Hz on one peer), but the SSH link to the
+# host tops out around 4 MB/s (~490 records/s at 8.4 KB each on 5 GHz;
+# 2.4 GHz records are ~1 KB).
 PERIODICITY_MS=20
-# One link by default. RuView models every node as a fixed sensor at a
-# known spot; several of our links (to devices that move around, sleep and
-# sit wherever) made it fuse nonsense - 4-5 phantom skeletons with ids
-# churning every few frames while it estimated 1 person, and a vitals
-# readout that followed whichever link sent the last frame (confirmed
-# live). One link to a device that stays put is what it can make sense of.
-MAX_PEERS=1
+# Movement is seen along each link's path, so several stationary, awake
+# devices in different directions cover more of the home (sensing.sh
+# --links changes it; the firmware has an unknown cap on periodic peers -
+# "max periodic cfr clients reached" - 4 worked in testing).
+MAX_PEERS=4
 PEERS=""
+BAND=both
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
 
-VAPS="wl0 wl1 wl13 wl5"
-RADIOS="wifi0 wifi1"
+ALL_VAPS="wl0 wl1 wl13 wl5"
+ALL_RADIOS="wifi0 wifi1"
+# VAPs and radios for BAND, from each VAP's live frequency and parent radio
+# rather than hard-coded (on the test router wifi0 = 2.4 GHz with wl1/wl13,
+# wifi1 = 5 GHz with wl0/wl5).
+VAPS=""
+RADIOS=""
+for v in $ALL_VAPS; do
+    ghz=$(iwconfig "$v" 2>/dev/null | sed -n 's/.*Frequency:\([0-9]\).*/\1/p')
+    case "$BAND:$ghz" in
+    both:* | 2.4:2 | 5:5) ;;
+    *) continue ;;
+    esac
+    VAPS="$VAPS $v"
+    r=$(cat "/sys/class/net/$v/parent" 2>/dev/null)
+    case " $RADIOS " in *" $r "*) ;; *) [ -n "$r" ] && RADIOS="$RADIOS $r" ;; esac
+done
+[ -n "$RADIOS" ] || RADIOS="$ALL_RADIOS"
 TIMER_PARAM=0x1194 # CFR global periodic timer enable, see cfr-trigger's package doc
 
 log() { echo "$(date '+%F %T') $*" >>"$LOG"; }
@@ -137,8 +160,8 @@ candidates() {
 # already capturing and still associated (hysteresis - RSSI and power-save
 # state wobble from one listing to the next, and re-ranking on every pass
 # made the selection churn: a peer stopped, another started, ten seconds
-# later the reverse, and every switch resets that node's history in
-# RuView - confirmed live), then awake clients by RSSI, then the rest.
+# later the reverse, and every switch resets that link's baseline -
+# confirmed live), then awake clients, longest associated first, then the rest.
 select_peers() {
     c=/tmp/cfr_candidates.$$
     candidates >"$c"
@@ -200,6 +223,27 @@ stop_readers() {
     READERS=""
 }
 
+disable_timer() {
+    for r in $ALL_RADIOS; do
+        [ -x "$TRIGGER" ] && "$TRIGGER" -iface "$r" -param "$TIMER_PARAM" -value 0 >>"$LOG" 2>&1
+    done
+    log "CFR periodic timer switched off"
+}
+
+# Prints the dump backlog size in KB after trimming it to MAX_BACKLOG_KB,
+# dropping the oldest files first.
+prune_backlog() {
+    total=$(du -k /tmp/cfr_dump_wifi*.bin 2>/dev/null | awk '{s += $1} END {print s + 0}')
+    over=$total
+    while [ "$total" -gt "$MAX_BACKLOG_KB" ]; do
+        oldest=$(ls -tr /tmp/cfr_dump_wifi*.bin 2>/dev/null | head -n 1)
+        [ -n "$oldest" ] || break
+        rm -f "$oldest"
+        total=$(du -k /tmp/cfr_dump_wifi*.bin 2>/dev/null | awk '{s += $1} END {print s + 0}')
+    done
+    echo "$over"
+}
+
 daemon_pid() {
     [ -f "$PIDFILE" ] || return 1
     pid=$(cat "$PIDFILE" 2>/dev/null)
@@ -225,11 +269,12 @@ stop_all_stations() {
 
 run_daemon() {
     echo $$ >"$PIDFILE"
-    trap 'stop_readers; stop_all_captures; rm -f "$PIDFILE"; exit 0' TERM INT
-    log "daemon start: periodicity=${PERIODICITY_MS}ms max_peers=$MAX_PEERS pinned='$PEERS'"
+    trap 'stop_readers; stop_all_captures; disable_timer; rm -f "$PIDFILE"; exit 0' TERM INT
+    log "daemon start: band=$BAND vaps=$VAPS radios=$RADIOS periodicity=${PERIODICITY_MS}ms max_peers=$MAX_PEERS pinned='$PEERS'"
     enable_timer
     stop_all_stations
     last=0
+    overflow_since=0
     while :; do
         now=$(date +%s)
         if [ $((now - last)) -ge "$RECONCILE_SECONDS" ]; then
@@ -239,18 +284,38 @@ run_daemon() {
         start_readers
         sleep "$POLL_SECONDS"
         stop_readers
+        backlog=$(prune_backlog)
+        now=$(date +%s)
+        if [ "$backlog" -gt "$MAX_BACKLOG_KB" ]; then
+            [ "$overflow_since" -gt 0 ] || overflow_since=$now
+            if [ $((now - overflow_since)) -ge "$NO_CONSUMER_SECONDS" ]; then
+                log "nobody has collected the captures for ${NO_CONSUMER_SECONDS}s (backlog ${backlog} KB) - stopping"
+                stop_all_captures
+                disable_timer
+                rm -f /tmp/cfr_dump_wifi*.bin "$PIDFILE"
+                exit 0
+            fi
+        else
+            overflow_since=0
+        fi
     done
 }
 
 stop_daemon() {
-    pid=$(daemon_pid) || return 0
-    kill "$pid" 2>/dev/null
-    # Give its trap a moment to stop the captures, then make sure no
-    # stray reader survives (a reader outliving the daemon would keep
-    # writing into /tmp with nobody rotating or collecting).
-    sleep 1
+    if pid=$(daemon_pid); then
+        kill "$pid" 2>/dev/null
+        # Give its trap a moment to stop the captures and the timer.
+        sleep 2
+    else
+        # No daemon (or its pidfile is gone): still make sure nothing is
+        # left capturing - every associated station and the timer.
+        stop_all_stations
+        disable_timer
+    fi
+    # Make sure no stray reader survives (it would keep writing into /tmp
+    # with nobody rotating or collecting).
     killall cfr_test_app 2>/dev/null
-    rm -f "$PIDFILE"
+    rm -f "$PIDFILE" /tmp/cfr_dump_wifi*.bin
 }
 
 case "$1" in

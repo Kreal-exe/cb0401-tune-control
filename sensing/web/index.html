@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motion Map</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<header>
+  <div class="title">Motion Map <span class="sub">Wi-Fi sensing, CB0401</span></div>
+  <div id="status" class="pill">connecting…</div>
+  <div class="spacer"></div>
+  <div class="seg" role="group" aria-label="View">
+    <button id="view2d" class="on">Plan</button>
+    <button id="view3d">3D</button>
+  </div>
+  <button id="editToggle">Edit plan</button>
+</header>
+
+<div id="toolbar" hidden>
+  <div class="seg" role="group" aria-label="Tool">
+    <button data-tool="wall" class="on">Wall</button>
+    <button data-tool="router">Router</button>
+    <button data-tool="move">Move</button>
+    <button data-tool="erase">Erase</button>
+  </div>
+  <button id="undoWall">Undo wall</button>
+  <span id="hint" class="hint"></span>
+  <span class="spacer"></span>
+  <span id="saved" class="hint"></span>
+</div>
+
+<main>
+  <section id="stage">
+    <canvas id="plan"></canvas>
+    <div id="three" hidden></div>
+    <div class="zoom">
+      <button id="zoomIn" aria-label="Zoom in">+</button>
+      <button id="zoomOut" aria-label="Zoom out">−</button>
+      <button id="zoomFit" aria-label="Fit">⤢</button>
+    </div>
+    <div id="summary" class="summary"></div>
+  </section>
+  <aside>
+    <h2>Devices</h2>
+    <p class="note">Movement is seen along the line between the router and a captured device. Place the router and devices on the plan (Edit plan) to get lines and the dot on the map. Devices that aren't placed show as a ring at their estimated distance from the router.</p>
+    <ul id="devices"></ul>
+    <details class="about">
+      <summary>How it works</summary>
+      <p>The router measures how the radio signal reaches each captured device. When someone moves between them, the channel starts to fluctuate. For every link, the fluctuation over the last second is compared with that link's normal level over the last 10 minutes.</p>
+      <p>The dot sits in the middle of the links that currently see movement and glows brighter the more there is. It means "somewhere around here", not exact coordinates: one link can't tell where along its line the person is, and someone standing perfectly still fades out.</p><p>Device rings come from signal strength alone (a single router can't triangulate), so they show distance, not direction, and walls make them rough.</p>
+    </details>
+  </aside>
+</main>
+
+<script src="app.js"></script>
+<script type="module" src="view3d.js"></script>
+</body>
+</html>
