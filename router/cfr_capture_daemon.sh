@@ -169,12 +169,17 @@ select_peers() {
     candidates >"$c"
     {
         for m in $PEERS; do awk -v m="$(echo "$m" | tr 'A-F' 'a-f')" '$2==m' "$c"; done
-        # ...but only while awake: a peer in power save yields nothing
-        # (firmware: "CFR capture failed as peer is in powersave") and
-        # would otherwise hold its slot forever (confirmed live).
-        [ -f "$STATE" ] && while read -r _v m; do [ -n "$m" ] && awk -v m="$m" '$2==m && $4==0' "$c"; done <"$STATE"
-        awk '$4==0' "$c" | sort -k5,5nr
-        awk '$4!=0' "$c" | sort -k5,5nr
+        # Anchors chosen (sensing.sh asks which devices never move): those
+        # and nothing else - filling spare slots with whatever is awake
+        # brought in phones and laptops, whose links flicker with their owners.
+        if [ -z "$PEERS" ]; then
+            # ...but only while awake: a peer in power save yields nothing
+            # (firmware: "CFR capture failed as peer is in powersave") and
+            # would otherwise hold its slot forever (confirmed live).
+            [ -f "$STATE" ] && while read -r _v m; do [ -n "$m" ] && awk -v m="$m" '$2==m && $4==0' "$c"; done <"$STATE"
+            awk '$4==0' "$c" | sort -k5,5nr
+            awk '$4!=0' "$c" | sort -k5,5nr
+        fi
     } | awk '!seen[$2]++ {print $1, $2}' | head -n "$MAX_PEERS"
     rm -f "$c"
 }
@@ -320,7 +325,22 @@ stop_daemon() {
     rm -f "$PIDFILE" /tmp/cfr_dump_wifi*.bin
 }
 
+# --stations: every associated station on either band, for choosing
+# anchors: "vap ghz mac rssi psmode assoc_seconds name".
+list_stations() {
+    for vap in $ALL_VAPS; do
+        ghz=$(iwconfig "$vap" 2>/dev/null | sed -n 's/.*Frequency:\([0-9.]*\).*/\1/p')
+        wlanconfig "$vap" list sta 2>/dev/null |
+            awk -v v="$vap" -v g="$ghz" 'NR>1 && /^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}[[:space:]]/ {
+                n = split($20, t, ":"); secs = (n == 3) ? t[1] * 3600 + t[2] * 60 + t[3] : 0
+                print v, g, tolower($1), $6, $NF, secs
+            }'
+    done | awk 'NR == FNR { if (NF >= 4) name[tolower($2)] = $4; next }
+        { n = ($3 in name && name[$3] != "*") ? name[$3] : "-"; print $0, n }' /tmp/dhcp.leases -
+}
+
 case "$1" in
+--stations) list_stations ;;
 --daemon) run_daemon ;;
 --stop) stop_daemon ;;
 --restart)

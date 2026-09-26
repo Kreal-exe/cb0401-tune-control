@@ -126,27 +126,25 @@ DHCP hostnames aren't always useful - some devices don't send one at all, and bo
 
 ## Motion map (optional, experimental)
 
-The router's Qualcomm Wi-Fi chips can measure CFR (Channel Frequency Response, Qualcomm's name for CSI): how the radio channel to a connected device looks, per subcarrier, many times a second. When someone moves between the router and a device, that channel starts to fluctuate. `./sensing.sh` turns that into a live map of your home:
+The router's Qualcomm Wi-Fi chips can measure CFR (Channel Frequency Response, Qualcomm's name for CSI): how the radio channel to a connected device looks, per subcarrier and receive antenna, a few hundred times a second. When someone moves near the path between the router and a device, part of that channel starts to change. `./sensing.sh` turns that into a live map of your home:
 
 ```bash
 ./sensing.sh                        # map at http://localhost:3000, plus a Cloudflare link sent to your phone
-./sensing.sh --band 2.4 --links 4   # capture on 2.4 GHz from up to four devices (remembered on the router)
+./sensing.sh --anchors aa:bb:..,cc:dd:..   # measure against these devices, no menu
 ./sensing.sh --local                # no tunnel: nothing leaves this machine
 ```
 
-The first time, click **Edit plan**, draw your walls (click corner to corner; the grid is 1 m), place the router, and place the devices that stay put (a TV, a desktop, a smart speaker, a robot vacuum on its dock). From then on:
+**Anchors.** Movement is seen on the path between the router and each captured device, so those devices must never move: a TV, a desktop, a robot vacuum on its dock, a smart lamp. Every run lists the connected devices, ticks the ones that look stationary (by name and by how steady their signal is over a few seconds), and lets you change the choice; it's remembered on the router and kept automatically after 20 seconds. Phones and laptops move with their owners and make poor anchors.
 
-- every captured device's line to the router lights up when there's movement along it, with a glowing zone around it; where zones of several links overlap, the glow adds up. That is the real resolution: one link can't tell where along its line someone is, so position gets finer only with more stationary devices spread around the home (a smart plug or a cheap always-on Wi-Fi board in each room adds a link). A person standing perfectly still fades out after a while;
-- devices you haven't placed (phones, laptops) show as a ring around the router at their estimated distance. That comes from signal strength alone, so it's distance, not direction, and walls make it rough;
-- there's a 2D plan and a 3D view with the walls extruded. Both work on a phone through the link.
+**The map.** Click **Edit plan**, draw your walls (corner to corner; the grid is 1 m), place the router and the anchors. Each anchor's line lights up with a glowing zone when there's movement along it, and under each device a strip shows the Doppler history: how fast the moving reflection's path gets longer or shorter. To get a dot where the person is, use **Teach a spot**: stand somewhere, click that spot, walk slowly around it for 20 seconds; do that at 5–8 spots. The live signal is then matched against what each spot looked like, and the page says how well the spots can be told apart. There's a 2D plan and a 3D view; both work on a phone through the link.
 
-How it works: every link is compared with its own normal level over the last 10 minutes (the first ~10 seconds after start are spent learning it). Checked against a real walk on the test router: with nobody moving the metric sat around 0.040, walking between the router and the device pushed it to 0.06–0.16 for as long as the walk lasted. `--threshold` sets how far above normal counts as movement (default 0.4 = 40%).
+How it works: each capture is cleaned up first — per-antenna gain steps, the device alternating its own transmit antennas (a TV here switched every ~1.2 s, and its channel jumped more than a person causes), the random phase every capture carries, single glitched captures. What's left is split into the static channel and the moving part; each link's moving power is compared with its own normal level over the last 10 minutes. On a recorded walk: 0 dB with nobody moving, +12 to +35 dB while walking. `--threshold` sets how many dB above normal counts as movement (default 3). `sensing/sensing -replay DIR` runs the same analysis over saved captures (the page's **Test recording** saves them to `data/rec/`).
 
 What runs where:
 
 - `router/cfr-trigger` — a small static Go binary talking nl80211 directly to arm or stop capture for one client; `-param` sets radio parameters Xiaomi's own tools can only read, such as the CFR periodic timer (`-iface wifi1 -param 0x1194 -value 1`) that periodic capture needs.
-- `router/cfr_capture_daemon.sh` — keeps periodic capture (every 20 ms, ~46 per second per device) running for up to four awake devices, longest connected first, with the stock `cfr_test_app` writing to `/tmp/cfr_dump_wifi*.bin`. Pin devices or change band/count/rate in `/etc/crontabs/patches/cfr_capture.conf` (`PEERS=`, `BAND=2.4|5|both`, `MAX_PEERS=`, `PERIODICITY_MS=`). It only runs while `sensing.sh` does; the captures land in the router's RAM, so it keeps at most 16 MB uncollected and stops by itself after a minute with nobody collecting (an earlier always-on version filled the router's memory and made it reboot).
-- `sensing/` — the map itself, one Go binary with the page built in: pulls the capture files over SSH, keeps only the 52 tones per antenna that carry signal, measures each link, serves the page. Your plan is stored in `data/plan.json` (gitignored).
+- `router/cfr_capture_daemon.sh` — keeps periodic capture running for the chosen anchors (every 3–8 ms depending on how many are on 5 GHz, ~120–230 captures per second each), with the stock `cfr_test_app` writing to `/tmp/cfr_dump_wifi*.bin`. Pin devices or change band/count/rate in `/etc/crontabs/patches/cfr_capture.conf` (`PEERS=`, `BAND=2.4|5|both`, `MAX_PEERS=`, `PERIODICITY_MS=`). It only runs while `sensing.sh` does; the captures land in the router's RAM, so it keeps at most 16 MB uncollected and stops by itself after a minute with nobody collecting (an earlier always-on version filled the router's memory and made it reboot).
+- `sensing/` — the map itself, one Go binary with the page built in: pulls the capture files over SSH, keeps only the 52 tones per antenna that carry signal, cleans and measures each link, serves the page. Your plan is stored in `data/plan.json` (gitignored).
 
 Devices in Wi-Fi power save (smart bulbs, idle phones) deliver captures only in bursts, so they make poor links. Nothing here is installed by `setup.sh`.
 

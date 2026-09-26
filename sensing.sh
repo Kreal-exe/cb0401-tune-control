@@ -20,13 +20,19 @@
 #      (with a per-run access key) through the ntfy/Telegram backend
 #      setup.sh configured in gui/.env.
 #
-# Usage: ./sensing.sh [--band 2.4|5|both] [--links N] [--local]
+# Anchors: the devices the router measures against. Movement is seen on
+# the path between the router and each anchor, so anchors must never move
+# (TV, desktop, vacuum on its dock, smart lamp) - a phone's or laptop's link
+# changes whenever its owner moves. Every run lists the connected devices,
+# pre-ticks the ones that look stationary (name, how steady their signal
+# is), and lets you change the choice; it is remembered on the router and
+# kept automatically after 20 s without input.
+#
+# Usage: ./sensing.sh [--anchors mac,mac,...] [--local]
 #                     [--threshold 3] [--no-router-install]
 #                     [--router-ip 192.168.31.1] [--router-key path] [--env-file path]
 #
-#   --band 2.4|5|both  Wi-Fi band to capture on (remembered on the router)
-#   --links N          how many devices to capture, 1-6 (remembered; chosen
-#                      automatically: awake first, longest connected first)
+#   --anchors LIST     set the anchors without the menu (comma-separated MACs)
 #   --local            no tunnel - nothing leaves this machine
 #   --threshold X      how far above its normal level a link must go to
 #                      count as movement, in dB (default 3)
@@ -40,8 +46,7 @@ ROUTER_KEY=""
 ENV_FILE=""
 PUBLIC=1
 ROUTER_INSTALL=1
-SET_BAND=""
-SET_LINKS=""
+SET_ANCHORS=""
 THRESHOLD="3"
 HTTP_PORT="${SENSING_PORT:-3000}"
 PUBLIC_PORT="${SENSING_PUBLIC_PORT:-3080}"
@@ -54,12 +59,8 @@ while [ $# -gt 0 ]; do
   --public) PUBLIC=1; shift ;;
   --no-router-install) ROUTER_INSTALL=0; shift ;;
   --threshold) THRESHOLD="$2"; shift 2 ;;
-  --band)
-    case "$2" in 2.4|5|both) SET_BAND="$2" ;; *) echo "--band must be 2.4, 5 or both" >&2; exit 2 ;; esac
-    shift 2 ;;
-  --links)
-    case "$2" in [1-6]) SET_LINKS="$2" ;; *) echo "--links must be 1-6" >&2; exit 2 ;; esac
-    shift 2 ;;
+  --anchors) SET_ANCHORS="$(echo "$2" | tr 'A-F,' 'a-f ')"; shift 2 ;;
+  --band|--links) echo "$1 is gone: pick the devices to capture in the anchor menu (or --anchors)" >&2; exit 2 ;;
   -h|--help) sed -n '2,/^set -e/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d'; exit 0 ;;
   *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -147,13 +148,97 @@ if [ "$ROUTER_INSTALL" = 1 ]; then
       sed -i "/cfr_capture_daemon/d" /etc/crontabs/root; /etc/init.d/cron restart >/dev/null 2>&1 || true
     fi'
 fi
-if [ -n "$SET_BAND" ] || [ -n "$SET_LINKS" ]; then
-  conf_cmd="touch /etc/crontabs/patches/cfr_capture.conf"
-  [ -n "$SET_BAND" ] && conf_cmd="$conf_cmd; sed -i '/^BAND=/d' /etc/crontabs/patches/cfr_capture.conf; echo 'BAND=$SET_BAND' >> /etc/crontabs/patches/cfr_capture.conf"
-  [ -n "$SET_LINKS" ] && conf_cmd="$conf_cmd; sed -i '/^MAX_PEERS=/d; /^PEERS=/d' /etc/crontabs/patches/cfr_capture.conf; echo 'MAX_PEERS=$SET_LINKS' >> /etc/crontabs/patches/cfr_capture.conf"
-  ssh_router "$conf_cmd"
+say "Anchors: devices that never move"
+CONF=/etc/crontabs/patches/cfr_capture.conf
+SAVED="$(ssh_router "sed -n 's/^PEERS=\"\\(.*\\)\"/\\1/p' $CONF 2>/dev/null" || true)"
+# Four listings 2 s apart: how much each device's signal wobbles.
+ST_FILE="$(mktemp)"
+for i in 1 2 3 4; do
+  ssh_router 'sh /etc/crontabs/patches/cfr_capture_daemon.sh --stations' >>"$ST_FILE" 2>/dev/null || true
+  [ "$i" = 4 ] || sleep 2
+done
+# one line per device: mac ghz rssi_min rssi_max psmode name verdict
+DEVICES="$(awk '
+  { mac = $3; if (!(mac in g)) { order[++n] = mac; lo[mac] = 999; hi[mac] = -999 }
+    g[mac] = $2; ps[mac] = $5; nm[mac] = $7
+    if ($4 < lo[mac]) lo[mac] = $4; if ($4 > hi[mac]) hi[mac] = $4 }
+  END { for (i = 1; i <= n; i++) { m = order[i]; name = tolower(nm[m]); v = "unsure"
+      if (name ~ /iphone|ipad|android|honor|galaxy|pixel|redmi-?note|oneplus|phone|macbook|laptop|notebook|watch|huawei|poco/) v = "moves"
+      else if (name ~ /roborock|vacuum|dreame|robot|light|bulb|lamp|tv|television|bravia|lg-?webos|mac-?mini|^mac$|imac|desktop|printer|plug|socket|camera|speaker|homepod|echo|nest|chromecast|appletv|nas|esp|tasmota|shelly|yeelight|miio|fridge|washer|conditioner/) v = "still"
+      else if (hi[m] - lo[m] >= 6) v = "moves"
+      print m, g[m], lo[m], hi[m], ps[m], nm[m], v } }' "$ST_FILE")"
+rm -f "$ST_FILE"
+if [ -z "$DEVICES" ]; then
+  echo "No devices connected to the router - nothing to measure against." >&2
+  exit 1
 fi
-echo "capture settings: $(ssh_router "grep -E '^(BAND|MAX_PEERS|PEERS)=' /etc/crontabs/patches/cfr_capture.conf 2>/dev/null | tr '\n' ' '" || true)"
+if [ -n "$SET_ANCHORS" ]; then
+  CHOSEN="$SET_ANCHORS"
+elif [ -n "$SAVED" ]; then
+  CHOSEN="$SAVED"
+else
+  CHOSEN="$(echo "$DEVICES" | awk '$7 == "still" {print $1}' | head -4 | tr '\n' ' ')"
+fi
+show_menu() {
+  local i=0
+  echo "$DEVICES" | while read -r mac ghz lo hi psm name verdict; do
+    i=$((i + 1))
+    mark="[ ]"; case " $CHOSEN " in *" $mac "*) mark="[x]" ;; esac
+    band="5 GHz"; case "$ghz" in 2*) band="2.4 GHz" ;; esac
+    note=""
+    case "$verdict" in still) note="stationary" ;; moves) note="moves with people" ;; *) note="?" ;; esac
+    [ "$psm" != 0 ] && note="$note, power save (may give fewer captures)"
+    [ $((hi - lo)) -ge 6 ] && note="$note, signal wobbled ${lo}..${hi} dBm"
+    printf "  %s %d  %-26s %-8s %4s dBm  %s\n" "$mark" "$i" "$name" "$band" "$hi" "$note"
+  done
+}
+if [ -z "$SET_ANCHORS" ] && [ -t 0 ]; then
+  first=1
+  while :; do
+    show_menu
+    if [ "$first" = 1 ]; then
+      printf "Numbers to tick/untick (e.g. 2 5), Enter to go on (keeps this choice in 20 s): "
+      if ! read -r -t 20 answer; then echo; answer=""; fi
+      first=0
+    else
+      printf "Numbers to tick/untick, Enter to go on: "
+      read -r answer || answer=""
+    fi
+    [ -n "$answer" ] || break
+    for n in $answer; do
+      mac="$(echo "$DEVICES" | sed -n "${n}p" | cut -d' ' -f1)"
+      [ -n "$mac" ] || continue
+      case " $CHOSEN " in
+      *" $mac "*) CHOSEN="$(echo " $CHOSEN " | sed "s/ $mac / /" | xargs)" ;;
+      *) CHOSEN="$(echo "$CHOSEN $mac" | xargs)" ;;
+      esac
+    done
+    echo
+  done
+else
+  show_menu
+fi
+CHOSEN="$(echo "$CHOSEN" | xargs)"
+N_ANCHORS="$(echo "$CHOSEN" | wc -w | tr -d ' ')"
+if [ "$N_ANCHORS" = 0 ]; then
+  echo "No anchors chosen - nothing to measure against." >&2
+  exit 1
+fi
+[ "$N_ANCHORS" -gt 4 ] && echo "Note: the router's firmware handled 4 captured devices in testing; more may be refused."
+# Capture rate: ~220 captures/s per device with one 5 GHz anchor. 5 GHz
+# records are 8.4 KB and the SSH link carries ~4 MB/s, so share it.
+N5=0
+for mac in $CHOSEN; do
+  echo "$DEVICES" | awk -v m="$mac" '$1 == m && $2 !~ /^2/ {f = 1} END {exit !f}' && N5=$((N5 + 1))
+done
+PERIOD=3; [ "$N5" -ge 2 ] && PERIOD=5; [ "$N5" -ge 3 ] && PERIOD=8
+ssh_router "touch $CONF; sed -i '/^BAND=/d; /^PEERS=/d; /^MAX_PEERS=/d; /^PERIODICITY_MS=/d' $CONF
+  printf 'BAND=both\nPEERS=\"%s\"\nMAX_PEERS=%s\nPERIODICITY_MS=%s\n' '$CHOSEN' '$N_ANCHORS' '$PERIOD' >> $CONF"
+if [ "$CHOSEN" != "$SAVED" ] && [ -n "$SAVED" ]; then
+  # a running daemon keeps its old settings; the map isn't running yet
+  ssh_router 'sh /etc/crontabs/patches/cfr_capture_daemon.sh --stop' >/dev/null 2>&1 || true
+fi
+echo "anchors: $(for mac in $CHOSEN; do echo "$DEVICES" | awk -v m="$mac" '$1 == m {print $6}'; done | tr '\n' ' ')(capture every ${PERIOD} ms)"
 
 say "Building the motion map"
 ( cd "$REPO_DIR/sensing" && go build -o sensing . )
