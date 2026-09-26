@@ -12,7 +12,6 @@ router/sms-reader/dist/
 router/sms-reader-arm
 router/cfr-trigger/dist/
 router/cfr-trigger-arm
-router/cfr-to-rvcsi/cfr-to-rvcsi
 
 # Local backups you may have made of your router
 backups/
@@ -24,3 +23,12 @@ Thumbs.db
 
 # Personal Claude Code permission overrides (not team-shared)
 .claude/settings.local.json
+router/cfr-to-rvcsi/cfr-to-rvcsi
+router/ruview-bridge/ruview-bridge
+
+# Fetched fresh by ruview.sh (see its own doc comment) - a separate,
+# much larger third-party project, not vendored into this repo.
+/ruview/
+router/ruview-proxy/ruview-proxy
+# RuView sensing-server runtime state (session secret etc.), written next to ruview.sh
+/data/

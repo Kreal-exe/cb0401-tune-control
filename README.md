@@ -19,6 +19,8 @@ Run once, `setup.sh` (macOS/Linux) or `setup.ps1` (Windows) will:
 
 Everything is idempotent — re-running the setup script is safe and just verifies/repairs each step.
 
+Separately and entirely optionally, `./ruview.sh` turns the router into a Wi-Fi sensing source for [RuView](https://github.com/ruvnet/ruview)'s dashboard — see [RuView Wi-Fi sensing dashboard](#ruview-wi-fi-sensing-dashboard-optional). Nothing else depends on it, and `start.sh`/`setup.sh` never run it.
+
 ## How SSH access is opened
 
 This isn't a novel exploit — it's documented Xiaomi router behavior that's been public knowledge in the router-hacking community for years. `bootstrap/open_ssh.sh`/`.ps1` try two paths automatically, in order:
@@ -132,7 +134,31 @@ The router's Qualcomm Wi-Fi chips can measure CFR (Channel Frequency Response, Q
 - `router/cfr_capture_daemon.sh` — keeps periodic capture running for one long-connected, awake client (configurable in `/etc/crontabs/patches/cfr_capture.conf`), with the stock `cfr_test_app` writing the results to `/tmp/cfr_dump_wifi*.bin`.
 - `router/cfr-to-rvcsi` — converts those dump files on your computer; each tool's doc comment has the reverse-engineered record format.
 
-Measured on the test router: up to ~46 captures per second per client at a 20 ms period (more at shorter periods). Nothing here is installed by `setup.sh`; it's groundwork for an optional sensing dashboard that isn't finished yet.
+Measured on the test router: up to ~46 captures per second per client at a 20 ms period (more at shorter periods). Nothing here is installed by `setup.sh`; `ruview.sh` (below) installs and uses it.
+
+## RuView Wi-Fi sensing dashboard (optional)
+
+The CB0401's Qualcomm radios can report CFR (Channel Frequency Response — per-subcarrier channel state, i.e. CSI) for any associated Wi-Fi client, and [RuView](https://github.com/ruvnet/ruview) is an open-source project that turns exactly that kind of data into presence/motion sensing with a live dashboard. `./ruview.sh` wires the two together, on demand:
+
+```bash
+./ruview.sh            # local only: http://localhost:3000/ui/index.html
+./ruview.sh --public   # same, plus a Cloudflare quick tunnel and the link sent to your phone
+```
+
+What it does, every run, idempotently:
+
+1. **Router side** — cross-builds `router/cfr-trigger` (an nl80211 vendor-command tool that arms CFR capture for one peer) and installs it together with `router/cfr_capture_daemon.sh`, which enables the firmware's CFR periodic timer (a setting Xiaomi's tools can read but not write; `cfr-trigger -param` sends it) and keeps periodic capture running every 20 ms for one awake client, preferring the one connected longest (a TV or desktop rather than a phone or a robot vacuum) — about 45–50 Hz, RuView's own per-node ceiling (measured live; the firmware can go up to ~245 Hz per client, and if you lower `PERIODICITY_MS` the bridge averages the excess down to 50 Hz for less noise instead of dropping it). Pin specific devices or change the rate in `/etc/crontabs/patches/cfr_capture.conf` (`PEERS=`, `MAX_PEERS=`, `PERIODICITY_MS=`).
+2. **RuView itself** — clones `github.com/ruvnet/ruview` into `./ruview/` (gitignored; it's a separate, much larger project, deliberately not vendored or forked here) and builds its `sensing-server` with `cargo`. The first build takes a while; later runs reuse it.
+3. **The model** — downloads RuView's newest published pretrained bundle (`ruvnet/wifi-densepose-pretrained`, v2.0.1, plain HTTPS), converts it with `sensing-server --convert-model` into the `.rvf` container the server loads, keeps it in `data/models/` (gitignored) and starts the server with it loaded (`/api/v1/model/info` reports it). Honest caveat from RuView's own code: in this version no published weights actually drive live inference — pose and vitals stay signal-derived either way; the model mainly switches the dashboard into its "Model Inference" mode.
+4. **The bridge** — `router/ruview-bridge` pulls every *finished* capture file off the router in one SSH round-trip (the file a reader is still writing is left for the next pass), drops empty records, keeps only the entries that actually carry the channel (measured on this hardware: 52 tones of the 20 MHz OFDM grid per receive chain, 4 chains on 5 GHz and 2 on 2.4 GHz; the rest of each capture buffer is noise), and replays the rest to `sensing-server` evenly over the time they were captured in, as RuView's own ESP32 raw-CSI UDP frames — so every captured client shows up in the **Sensing** tab as a node with its own variance/motion/presence readout. (RuView also has a Qualcomm frame format, `-format qcs1`, but its server only exposes that as a raw snapshot endpoint and never feeds it to the sensing pipeline.)
+5. **Vital signs without an empty room** — upstream RuView publishes breathing and heart rate only after a 10-minute calibration on a *completely empty* room, and afterwards only while it counts exactly one person. A router by a window, with people outside and other people at home, can never satisfy that, so the numbers never appeared. `ruview.sh` therefore applies a small local patch to RuView's server (re-applied after every update, skipped with a note if upstream changes those lines): whenever someone is detected and RuView's own quality gates pass (signal quality ≥ 0.40, rate confidence ≥ 0.55), the rates are published and labelled `uncalibrated_estimate` in `/api/v1/vital-signs`. They are estimates, not medical data; with several people in range they can come from any of them. `RUVIEW_CALIBRATE=1` switches back to RuView's strict mode with an automatic, announced empty-room calibration every 11.5 hours.
+The dashboard at `http://localhost:3000` is served through `router/ruview-proxy`, which puts RuView's HTTP API and its separate live WebSocket on one address. Without that, RuView's own **Observatory** page silently runs its demo generator.
+
+6. **`--public`** — puts the dashboard behind `router/ruview-proxy` (RuView serves its UI and its live WebSocket on two different ports, a quick tunnel forwards one; the proxy also adds a per-run access key), opens a `cloudflared` quick tunnel to it, and sends the resulting `https://….trycloudflare.com/…?k=…` link through whatever `setup.sh` configured — your ntfy topic or Telegram bot — using the very same `notify()` the router's own alerts go through. The link lives exactly as long as the script runs. Needs `cloudflared` (`brew install cloudflared` on macOS).
+
+The script stays in the foreground and stops everything on Ctrl+C. Logs land in `/tmp/ruview-*.log`.
+
+**What to expect, honestly.** The selected client becomes a node streaming at roughly 45–50 Hz, more than enough for RuView's breathing (0.1–0.5 Hz) and heart-rate (0.67–2 Hz) band-passes. Presence, motion and signal strength are real measurements. Breathing and heart rate are uncalibrated estimates (see above). The skeletons RuView draws are procedural, not a measured pose: its published models don't run pose inference in the live path, whatever is loaded. A client in Wi-Fi power save yields no data, so the daemon prefers awake, long-connected devices. Extra prerequisites over the rest of this project: [Rust/cargo](https://rustup.rs), `python3` and, for `--public`, `cloudflared`.
 
 ## What gets cleaned up
 
@@ -216,6 +242,7 @@ Both modify firmware/modem configuration and aren't covered by the same idempote
 - This project modifies firmware behavior on a device that may be leased from, or branded by, your carrier. Check your terms of service; use at your own risk.
 - Opening SSH relies on a default password derived from your router's serial number (see [How SSH access is opened](#how-ssh-access-is-opened)) — this is stock Xiaomi firmware behavior, not something this project introduces, but it does mean anyone on your LAN who can reach the router's web UI before you run setup could derive that password too. Run setup promptly after unboxing/resetting the device.
 - The GUI has no authentication of its own — it relies entirely on binding to `127.0.0.1`. Do not expose port 5757 to your network.
+- `./ruview.sh --public` deliberately *does* expose something: RuView's dashboard, through a Cloudflare quick tunnel, i.e. via Cloudflare's servers. RuView's API is unauthenticated, so the only gate is the random per-run access key in the link you're sent — treat that link like the ntfy topic (anyone who has it is in), don't forward it, and remember it dies with the script. Without `--public` nothing leaves your machine except SSH to the router.
 - `gui/router_key`, `gui/router_key.pub`, and `gui/.env` (which holds the router's root password, plus your ntfy topic or Telegram bot token) are generated locally by setup and are gitignored — never commit or share them.
 - SMS forwarding (see [Incoming SMS](#incoming-sms)) means anything sent to this SIM - including 2FA/login codes - ends up in your ntfy topic or Telegram chat too. Turn it off from the Device monitor card if that's not something you want going through a third-party push service.
 - The SMS reply feature means anyone who can reply in that Telegram chat can send a real text from this SIM's number to whoever originally texted it. That's normally just you, but it's worth remembering if you ever add someone else to the chat or the bot token leaks - it's not just read access to your messages at that point, it's send access too.
