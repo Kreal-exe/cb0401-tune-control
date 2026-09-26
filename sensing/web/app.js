@@ -54,6 +54,17 @@ function fit() {
 }
 
 // ------------------------------------------------------------- helpers ---
+// The plan as drawn, or - before anything is placed - a stand-in: the router
+// in the middle and every captured device 3 m around it, marked as not yet
+// placed, so links and zones show from the first minute. Nothing is saved.
+function effPlan() {
+  if (S.plan.router) return { router: S.plan.router, devices: S.plan.devices, virtual: false };
+  const devices = {};
+  const links = ((S.state && S.state.links) || []).map((l) => l.mac).sort();
+  links.forEach((mac, i) => { const a = (i / Math.max(1, links.length)) * Math.PI * 2 - Math.PI / 2; devices[mac] = [Math.round(Math.cos(a) * 30) / 10, Math.round(Math.sin(a) * 30) / 10]; });
+  return { router: [0, 0], devices, virtual: true };
+}
+S.effPlan = effPlan;
 const escapeHtml = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const linkOf = (mac) => (S.state && S.state.links || []).find((l) => l.mac === mac);
 const stationOf = (mac) => (S.state && S.state.stations || []).find((s) => s.mac === mac);
@@ -139,9 +150,10 @@ function draw() {
   for (let y = Math.floor(wy1); y <= wy2; y++) { const [, sy] = toScreen(0, y); ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(r.width, sy); ctx.stroke(); }
 
   // links router -> device, lit by motion
-  const R = S.plan.router;
+  const EP = effPlan();
+  const R = EP.router;
   if (R) {
-    for (const [mac, p] of Object.entries(S.plan.devices)) {
+    for (const [mac, p] of Object.entries(EP.devices)) {
       const l = linkOf(mac);
       const [ax, ay] = toScreen(R[0], R[1]), [bx, by] = toScreen(p[0], p[1]);
       const live = l && !l.stale;
@@ -177,7 +189,7 @@ function draw() {
   if (R) {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    for (const [mac, p] of Object.entries(S.plan.devices)) {
+    for (const [mac, p] of Object.entries(EP.devices)) {
       const k = zoneLevel(mac);
       if (k < 0.02) continue;
       const z = zoneOf(R, p);
@@ -199,12 +211,12 @@ function draw() {
 
   // devices
   ctx.font = '12px sans-serif';
-  for (const [mac, p] of Object.entries(S.plan.devices)) {
+  for (const [mac, p] of Object.entries(EP.devices)) {
     const [sx, sy] = toScreen(p[0], p[1]);
     const l = linkOf(mac);
     ctx.fillStyle = l && !l.stale ? (l.motion ? '#7ff3ff' : '#5ee0c1') : '#5a6878';
     ctx.beginPath(); ctx.arc(sx, sy, 7, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#dde6ef'; ctx.fillText(labelOf(mac), sx + 10, sy + 4);
+    ctx.fillStyle = '#dde6ef'; ctx.fillText(labelOf(mac) + (EP.virtual ? ' (not placed)' : ''), sx + 10, sy + 4);
   }
   // router
   if (R) {
@@ -398,10 +410,10 @@ function renderSummary() {
   if (!s) { el.textContent = 'Waiting for data…'; return; }
   const live = (s.links || []).filter((l) => !l.stale);
   const moving = live.filter((l) => l.motion && !l.learning);
-  if (!S.plan.router) { el.innerHTML = 'Click <b>Edit plan</b>, draw the walls, then place the router and devices.'; return; }
-  if (!live.length) { el.textContent = 'No capture data from the router.'; return; }
-  if (live.every((l) => l.learning)) { el.textContent = 'Learning the normal signal level, about 10 seconds…'; return; }
-  el.innerHTML = (moving.length ? `<b>Motion</b> near the line to ${moving.map((l) => escapeHtml(labelOf(l.mac))).join(', ')}` : 'Quiet: no movement');
+  const placeHint = !S.plan.router ? '<br><span style="color:#f2b35b">Positions are placeholders. Click <b>Edit plan</b> to draw walls and put the router and devices where they really are.</span>' : '';
+  if (!live.length) { el.innerHTML = 'No capture data from the router.' + placeHint; return; }
+  if (live.every((l) => l.learning)) { el.innerHTML = 'Learning the normal signal level, about 10 seconds…' + placeHint; return; }
+  el.innerHTML = (moving.length ? `<b>Motion</b> near the line to ${moving.map((l) => escapeHtml(labelOf(l.mac))).join(', ')}` : 'Quiet: no movement') + placeHint;
 }
 
 // Poll the newest state a few times a second. (An event stream never got
@@ -422,7 +434,26 @@ async function poll() {
   } catch (e) { $('status').textContent = 'reconnecting…'; $('status').className = 'pill bad'; }
   setTimeout(poll, 300);
 }
-function connect() { poll(); }
+function connect() { poll(); recPoll(); }
+
+// ------------------------------------------------------------- recording ---
+let recState = { recording: false };
+function renderRec() {
+  const b = $('recToggle');
+  b.textContent = recState.recording ? 'Stop recording' : 'Start recording';
+  b.classList.toggle('on', !!recState.recording);
+  $('recInfo').textContent = recState.recording ? `${recState.seconds}s · ${recState.mb.toFixed(0)} MB · ${recState.label || 'no label yet'}` : (recState.session ? `saved ${recState.session}` : '');
+  document.querySelectorAll('.rec-labels button').forEach((x) => { x.disabled = !recState.recording; x.classList.toggle('on', recState.recording && recState.label === x.dataset.label); });
+}
+async function recCall(body) {
+  try {
+    const r = await fetch('api/rec', body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+    if (r.ok) { const st = await r.json(); recState = { ...st, session: st.session || recState.session }; renderRec(); }
+  } catch (e) {}
+}
+function recPoll() { recCall(); setTimeout(recPoll, 1000); }
+$('recToggle').onclick = () => recCall({ action: recState.recording ? 'stop' : 'start' });
+document.querySelectorAll('.rec-labels button').forEach((b) => b.onclick = () => recCall({ action: 'mark', label: b.dataset.label }));
 
 let userMovedView = false; // after the user pans or zooms, stop auto-fitting
 async function init() {

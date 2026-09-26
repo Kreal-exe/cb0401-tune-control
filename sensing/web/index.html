@@ -52,6 +52,19 @@
     <h2>Devices</h2>
     <p class="note">Movement is seen along the line between the router and a captured device. Place the router and devices on the plan (Edit plan) to get lines and movement zones on the map.</p>
     <ul id="devices"></ul>
+    <section id="recPanel" class="rec">
+      <h2>Test recording</h2>
+      <p class="note">Records the raw capture with labels, to tune tracking against what really happened. Start it, then press what you're doing as you do it.</p>
+      <div class="rec-row"><button id="recToggle">Start recording</button><span id="recInfo" class="hint"></span></div>
+      <div class="rec-labels">
+        <button data-label="empty">Nobody moving</button>
+        <button data-label="walking">Walking around</button>
+        <button data-label="toward_router">Walking toward router</button>
+        <button data-label="away_from_router">Walking away from router</button>
+        <button data-label="across">Walking across (left-right)</button>
+        <button data-label="standing">Standing still in the room</button>
+      </div>
+    </section>
     <details class="about">
       <summary>How it works</summary>
       <p>The router measures how the radio signal reaches each captured device. When someone moves between them, the channel starts to fluctuate. For every link, the fluctuation over the last second is compared with that link's normal level over the last 10 minutes.</p>

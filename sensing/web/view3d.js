@@ -7,6 +7,7 @@ const S = window.sensing;
 const host = document.getElementById('three');
 const WALL_H = 2.5;
 
+let epSig = '';
 let renderer, scene, camera, controls, planGroup, linkObjs = {}, dot, dotLight, halo;
 
 function init() {
@@ -57,10 +58,10 @@ function zoneTex() {
 }
 
 function bounds() {
-  const pts = [];
+  const pts = [], EP = S.effPlan();
   for (const w of S.plan.walls) pts.push([w[0], w[1]], [w[2], w[3]]);
-  if (S.plan.router) pts.push(S.plan.router);
-  for (const p of Object.values(S.plan.devices)) pts.push(p);
+  if (EP.router) pts.push(EP.router);
+  for (const p of Object.values(EP.devices)) pts.push(p);
   if (!pts.length) return [-5, -4, 5, 4];
   let b = [Infinity, Infinity, -Infinity, -Infinity];
   for (const [x, y] of pts) b = [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)];
@@ -91,13 +92,15 @@ function rebuild(reason) {
     m.rotation.y = -Math.atan2(by - ay, bx - ax);
     planGroup.add(m);
   }
-  const R = S.plan.router;
+  const EP = S.effPlan();
+  epSig = JSON.stringify(EP);
+  const R = EP.router;
   if (R) {
     const r = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 0.3), new THREE.MeshStandardMaterial({ color: 0xf2b35b, emissive: 0x3a2610 }));
     r.position.set(R[0], 0.9, R[1]);
     planGroup.add(r);
   }
-  for (const [mac, p] of Object.entries(S.plan.devices)) {
+  for (const [mac, p] of Object.entries(EP.devices)) {
     const s = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 12), new THREE.MeshStandardMaterial({ color: 0x5ee0c1, emissive: 0x0d2a24 }));
     s.position.set(p[0], 0.8, p[1]);
     planGroup.add(s);
@@ -138,6 +141,7 @@ const cool = new THREE.Color(0x5a6878), live = new THREE.Color(0x5ee0c1), hot = 
 function animate() {
   requestAnimationFrame(animate);
   if (S.view !== '3d') return;
+  if (JSON.stringify(S.effPlan()) !== epSig) rebuild(); // placeholder layout follows the captured devices
   controls.update();
   const st = S.state;
   const links = (st && st.links) || [];

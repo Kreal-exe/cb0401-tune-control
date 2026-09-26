@@ -40,6 +40,7 @@ type Plan struct {
 type server struct {
 	rt       *router
 	an       *analyzer
+	rec      *recorder
 	planPath string
 
 	mu       sync.Mutex
@@ -96,6 +97,7 @@ func (s *server) pull(rotation time.Duration) {
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
+		s.rec.save(files)
 		n := s.an.ingest(files, rotation)
 		s.mu.Lock()
 		s.records += n
@@ -291,6 +293,7 @@ func main() {
 		rt:       &router{keyPath: *keyPath, host: *host},
 		an:       newAnalyzer(*threshold),
 		planPath: *planPath,
+		rec:      &recorder{root: filepath.Join(filepath.Dir(*planPath), "rec")},
 		subs:     map[chan []byte]struct{}{},
 	}
 	s.loadPlan()
@@ -304,6 +307,7 @@ func main() {
 	mux.HandleFunc("/api/stream", s.handleStream)
 	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/plan", s.handlePlan)
+	mux.HandleFunc("/api/rec", s.rec.handle)
 	noCache := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		mux.ServeHTTP(w, r)

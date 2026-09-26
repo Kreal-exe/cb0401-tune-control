@@ -64,3 +64,9 @@ aside h2 { font-size: 14px; margin: 4px 0 8px; }
   aside { width: auto; border-left: none; border-top: 1px solid var(--line); }
   .summary { max-width: 90%; }
 }
+.rec { margin-top: 16px; }
+.rec-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.rec-labels { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.rec-labels button { padding: 10px 8px; font-size: 13px; }
+.rec-labels button:disabled { opacity: 0.4; cursor: default; }
+#recToggle.on { background: #3a1818; border-color: #e0605e; color: #ff8a88; }
