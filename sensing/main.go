@@ -41,6 +41,7 @@ type server struct {
 	rt       *router
 	an       *analyzer
 	rec      *recorder
+	teach    *teacher
 	planPath string
 
 	mu       sync.Mutex
@@ -127,6 +128,7 @@ type snapshot struct {
 	Time      int64       `json:"time"`
 	Links     []LinkState `json:"links"`
 	Dot       Dot         `json:"dot"`
+	Pos       Pos         `json:"pos"` // taught position of the movement
 	Stations  []station   `json:"stations"`
 	Receiving bool        `json:"receiving"` // capture data arrived in the last few seconds
 	Error     string      `json:"error,omitempty"`
@@ -142,7 +144,8 @@ func (s *server) broadcastLoop() {
 		receiving := now.Sub(s.lastData) < 5*time.Second
 		s.mu.Unlock()
 		links, dot := s.an.tick(now, pl)
-		b, _ := json.Marshal(snapshot{Time: now.UnixMilli(), Links: links, Dot: dot, Stations: st, Receiving: receiving, Error: errText})
+		pos := s.teach.tick(now, links)
+		b, _ := json.Marshal(snapshot{Time: now.UnixMilli(), Links: links, Dot: dot, Pos: pos, Stations: st, Receiving: receiving, Error: errText})
 		s.subsMu.Lock()
 		s.latest = b
 		for ch := range s.subs {
@@ -302,6 +305,7 @@ func main() {
 		an:       newAnalyzer(*threshold),
 		planPath: *planPath,
 		rec:      &recorder{root: filepath.Join(filepath.Dir(*planPath), "rec")},
+		teach:    newTeacher(filepath.Join(filepath.Dir(*planPath), "teach.json")),
 		subs:     map[chan []byte]struct{}{},
 	}
 	s.loadPlan()
@@ -316,6 +320,7 @@ func main() {
 	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/plan", s.handlePlan)
 	mux.HandleFunc("/api/rec", s.rec.handle)
+	mux.HandleFunc("/api/teach", s.teach.handle)
 	noCache := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		mux.ServeHTTP(w, r)

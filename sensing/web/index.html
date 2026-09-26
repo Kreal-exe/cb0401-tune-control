@@ -52,6 +52,12 @@
     <h2>Devices</h2>
     <p class="note">Movement is seen along the line between the router and a captured device. Place the router and devices on the plan (Edit plan) to get lines and movement zones on the map.</p>
     <ul id="devices"></ul>
+    <section id="teachPanel" class="rec">
+      <h2>Positions</h2>
+      <p class="note">Teach the map where things happen: press the button, stand at a spot, click it on the plan, and walk slowly in a small circle there for 20 seconds. Do it at 5–8 spots across the home (near the router, by the TV, in each room, by the door). The dot then shows which taught spot the live signal looks most like.</p>
+      <div class="rec-row"><button id="teachBtn">Teach a spot</button><button id="teachClear" hidden>Forget all</button></div>
+      <p id="teachInfo" class="hint"></p>
+    </section>
     <section id="recPanel" class="rec">
       <h2>Test recording</h2>
       <p class="note">Records the raw capture with labels, to tune tracking against what really happened. Start it, then press what you're doing as you do it.</p>

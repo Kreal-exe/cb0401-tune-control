@@ -75,3 +75,5 @@ aside h2 { font-size: 14px; margin: 4px 0 8px; }
 .dop canvas { display: block; width: 100%; height: 44px; border-radius: 4px; }
 .dop-l { position: absolute; right: 4px; top: 1px; font-size: 9px; color: #6b7a8a; pointer-events: none; }
 .dop-l.dop-b { top: auto; bottom: 1px; }
+#plan.picking { cursor: crosshair; }
+#teachInfo { margin: 6px 0 0; }

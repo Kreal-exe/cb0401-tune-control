@@ -153,14 +153,14 @@ function animate() {
     o.line.material.opacity = on ? 0.45 + 0.55 * k : 0.35;
     o.zone.material.opacity = 0.8 * S.zoneLevel(mac);
   }
-  const d = st && st.dot;
-  const I = d && d.placed ? d.intensity : 0;
-  if (d && d.placed) dot.position.set(d.x, 1.0, d.y);
-  dot.visible = false; // replaced by the zones
+  const D = S.dot;
+  const I = D ? D.k * (D.rough ? 0.5 : 1) : 0;
+  if (D) dot.position.set(D.x, 1.0, D.y);
+  dot.visible = I > 0.02;
   const pulse = 1 + 0.08 * Math.sin(performance.now() / 250);
-  dot.material.opacity = I;
+  dot.material.opacity = D && D.rough ? 0 : I;
   halo.material.opacity = 0.9 * I;
-  halo.scale.setScalar((1.6 + 1.6 * I) * pulse);
+  halo.scale.setScalar((D && D.rough ? 3.5 : 1.6 + 1.6 * I) * pulse);
   dotLight.intensity = 4 * I;
   renderer.render(scene, camera);
 }
