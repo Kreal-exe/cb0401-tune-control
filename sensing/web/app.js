@@ -251,6 +251,22 @@ canvas.addEventListener('pointerdown', (ev) => {
     if (!dragging) panning = { x: ev.clientX, y: ev.clientY, o: { ...origin } };
     canvas.setPointerCapture(ev.pointerId); return;
   }
+  if (tool === 'scale') {
+    let best = -1, bd = 14 / scale;
+    S.plan.walls.forEach((w, i) => { const d = distToSeg(p, [w[0], w[1]], [w[2], w[3]]); if (d < bd) { bd = d; best = i; } });
+    if (best < 0) return;
+    const w = S.plan.walls[best], len = Math.hypot(w[2] - w[0], w[3] - w[1]);
+    const v = prompt(`This wall is drawn ${len.toFixed(1)} m long. How long is it really, in metres?`, len.toFixed(1));
+    const real = v && parseFloat(v.replace(',', '.'));
+    if (!real || real <= 0 || !len) return;
+    const f = real / len, o = S.plan.router || [w[0], w[1]];
+    const sc = (q) => [Math.round((o[0] + (q[0] - o[0]) * f) * 100) / 100, Math.round((o[1] + (q[1] - o[1]) * f) * 100) / 100];
+    S.plan.walls = S.plan.walls.map((x) => [...sc([x[0], x[1]]), ...sc([x[2], x[3]])]);
+    if (S.plan.router) S.plan.router = sc(S.plan.router);
+    for (const k of Object.keys(S.plan.devices)) S.plan.devices[k] = sc(S.plan.devices[k]);
+    planChanged(); userMovedView = false; fit();
+    return;
+  }
   if (tool === 'erase') {
     const m = hitMarker(p);
     if (m && m.kind === 'router') { S.plan.router = null; planChanged(); return; }
@@ -327,6 +343,7 @@ function setHint() {
     router: 'Click where the router stands.',
     move: 'Drag the router or devices. Drag empty space to pan.',
     erase: 'Click a wall, the router or a device to remove it.',
+    scale: 'Click a wall whose real length you know: the whole plan is resized to match.',
   }[tool];
   $('hint').textContent = placing ? `Click on the plan where "${labelOf(placing)}" is.` : h;
 }
