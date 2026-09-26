@@ -10,6 +10,9 @@ gui/gui
 gui/dist/
 router/sms-reader/dist/
 router/sms-reader-arm
+router/cfr-trigger/dist/
+router/cfr-trigger-arm
+router/cfr-to-rvcsi/cfr-to-rvcsi
 
 # Local backups you may have made of your router
 backups/
@@ -18,3 +21,6 @@ backups/
 # OS noise
 .DS_Store
 Thumbs.db
+
+# Personal Claude Code permission overrides (not team-shared)
+.claude/settings.local.json

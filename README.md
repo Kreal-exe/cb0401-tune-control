@@ -124,6 +124,16 @@ DHCP hostnames aren't always useful - some devices don't send one at all, and bo
 
 **On macOS**, this needs the "Local Network" permission - a plain command-line binary like this one doesn't get the usual permission popup for it, so if manufacturer/mDNS names aren't showing up, check System Settings → Privacy & Security → Local Network and enable it for the GUI binary, then restart the GUI. Windows/Linux don't have an equivalent gate.
 
+## Wi-Fi channel capture, CFR (experimental)
+
+The router's Qualcomm Wi-Fi chips can measure CFR (Channel Frequency Response, Qualcomm's name for CSI): how the radio channel to a connected device looks, per subcarrier, many times a second. That's the raw material for Wi-Fi presence and motion sensing. The stock firmware has everything in the kernel but ships no tool to switch it on; `router/` adds the missing pieces:
+
+- `router/cfr-trigger` — a small static Go binary (`build.sh` cross-builds it) that talks nl80211 directly to arm or stop capture for one client, and with `-param` sets radio parameters Xiaomi's own tools can only read, such as the CFR periodic timer (`-iface wifi1 -param 0x1194 -value 1`) that periodic capture needs.
+- `router/cfr_capture_daemon.sh` — keeps periodic capture running for one long-connected, awake client (configurable in `/etc/crontabs/patches/cfr_capture.conf`), with the stock `cfr_test_app` writing the results to `/tmp/cfr_dump_wifi*.bin`.
+- `router/cfr-to-rvcsi` — converts those dump files on your computer; each tool's doc comment has the reverse-engineered record format.
+
+Measured on the test router: up to ~46 captures per second per client at a 20 ms period (more at shorter periods). Nothing here is installed by `setup.sh`; it's groundwork for an optional sensing dashboard that isn't finished yet.
+
 ## What gets cleaned up
 
 By default (`sh cleanup.sh`, no flags), the following is disabled — all verified to have zero effect on routing, Wi-Fi, or cellular functionality:
