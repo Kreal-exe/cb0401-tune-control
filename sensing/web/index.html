@@ -50,14 +50,8 @@
   </section>
   <aside>
     <h2>Devices</h2>
-    <p class="note">Movement is seen along the line between the router and a captured device. Place the router and devices on the plan (Edit plan) to get lines and movement zones on the map.</p>
+    <p class="note">These anchors never move; the router measures the signal to each of them. Place the router and the anchors on the plan (Edit plan) and draw the walls: that geometry is what turns the signals into moving balls.</p>
     <ul id="devices"></ul>
-    <section id="teachPanel" class="rec">
-      <h2>Positions</h2>
-      <p class="note">Teach the map where things happen: press the button, stand at a spot, click it on the plan, and walk slowly in a small circle there for 20 seconds. Do it at 5–8 spots across the home (near the router, by the TV, in each room, by the door). The dot then shows which taught spot the live signal looks most like.</p>
-      <div class="rec-row"><button id="teachBtn">Teach a spot</button><button id="teachClear" hidden>Forget all</button></div>
-      <p id="teachInfo" class="hint"></p>
-    </section>
     <section id="recPanel" class="rec">
       <h2>Test recording</h2>
       <p class="note">Records the raw capture with labels, to tune tracking against what really happened. Start it, then press what you're doing as you do it.</p>
@@ -75,7 +69,8 @@
       <summary>How it works</summary>
       <p>The router measures how the radio signal reaches each captured device, on every receive antenna, a few hundred times a second. Each snapshot is cleaned up first: gain steps, the device switching its own transmit antennas, and the random phase every snapshot carries are removed. What remains is split into the static part (walls, furniture) and the moving part - reflections off a person. For every link, the moving part's power over the last second is compared with that link's normal level over the last 10 minutes.</p>
       <p>The strip under a device is its Doppler history: how fast the path of the moving reflection gets longer or shorter (up to ±2.5 m/s), newest on the right. Walking shows up as a band away from the middle line; someone fidgeting in place stays near it.</p>
-      <p>A glowing zone appears around each line that sees movement; where zones overlap, the glow adds up. That is the honest resolution: a link can't tell where along its line someone is, so position gets finer only with more links crossing the home in different directions. Someone standing perfectly still fades out.</p><p>Where a device is can't be measured with one router: signal strength depends on walls, the band (5 GHz fades faster) and each device's antenna, so a TV right behind a wall can look further away than a phone two rooms off. Place the devices yourself.</p>
+      <p>Every link is router → reflection off a person → anchor. How fast that path gets longer or shorter (Doppler) depends on where the person is and which way they walk, and four links in different directions pin that down. A particle filter tries thousands of possible positions and velocities, keeps those that explain what every link measures and never walk through a drawn wall, and shows where they gather as a ball, with a trail of where it went.</p>
+      <p>Honest limits: a person standing still makes no Doppler and fades out; two people in the same part of the flat look like one; right next to the router every link moves at once, so position there is rough.</p>
     </details>
   </aside>
 </main>

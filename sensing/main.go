@@ -41,7 +41,7 @@ type server struct {
 	rt       *router
 	an       *analyzer
 	rec      *recorder
-	teach    *teacher
+	track    *tracker
 	planPath string
 
 	mu       sync.Mutex
@@ -127,8 +127,7 @@ func (s *server) refreshStations() {
 type snapshot struct {
 	Time      int64       `json:"time"`
 	Links     []LinkState `json:"links"`
-	Dot       Dot         `json:"dot"`
-	Pos       Pos         `json:"pos"` // taught position of the movement
+	Track     TrackState  `json:"track"` // moving bodies on the plan
 	Stations  []station   `json:"stations"`
 	Receiving bool        `json:"receiving"` // capture data arrived in the last few seconds
 	Error     string      `json:"error,omitempty"`
@@ -143,9 +142,9 @@ func (s *server) broadcastLoop() {
 		errText := s.stErr
 		receiving := now.Sub(s.lastData) < 5*time.Second
 		s.mu.Unlock()
-		links, dot := s.an.tick(now, pl)
-		pos := s.teach.tick(now, links)
-		b, _ := json.Marshal(snapshot{Time: now.UnixMilli(), Links: links, Dot: dot, Pos: pos, Stations: st, Receiving: receiving, Error: errText})
+		links := s.an.tick(now)
+		tr := s.track.step(now, pl, links)
+		b, _ := json.Marshal(snapshot{Time: now.UnixMilli(), Links: links, Track: tr, Stations: st, Receiving: receiving, Error: errText})
 		s.subsMu.Lock()
 		s.latest = b
 		for ch := range s.subs {
@@ -285,7 +284,7 @@ func main() {
 	replayDir := flag.String("replay", "", "analyse saved capture files in this directory, print the result and exit")
 	flag.Parse()
 	if *replayDir != "" {
-		if err := replay(*replayDir, *threshold, *rotation); err != nil {
+		if err := replay(*replayDir, *planPath, *threshold, *rotation); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -305,7 +304,7 @@ func main() {
 		an:       newAnalyzer(*threshold),
 		planPath: *planPath,
 		rec:      &recorder{root: filepath.Join(filepath.Dir(*planPath), "rec")},
-		teach:    newTeacher(filepath.Join(filepath.Dir(*planPath), "teach.json")),
+		track:    newTracker(),
 		subs:     map[chan []byte]struct{}{},
 	}
 	s.loadPlan()
@@ -320,7 +319,6 @@ func main() {
 	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/plan", s.handlePlan)
 	mux.HandleFunc("/api/rec", s.rec.handle)
-	mux.HandleFunc("/api/teach", s.teach.handle)
 	noCache := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		mux.ServeHTTP(w, r)

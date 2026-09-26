@@ -1,5 +1,5 @@
-// 3D view of the same plan: extruded walls, router, devices, links that
-// light up with motion, and the glowing dot. Plan (x, y) maps to (x, 0, y).
+// 3D view of the same plan: extruded walls, router, anchors, and a glowing
+// ball per moving body with its trail. Plan (x, y) maps to (x, 0, y).
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
@@ -8,7 +8,7 @@ const host = document.getElementById('three');
 const WALL_H = 2.5;
 
 let epSig = '';
-let renderer, scene, camera, controls, planGroup, linkObjs = {}, dot, dotLight, halo;
+let renderer, scene, camera, controls, planGroup, dot, dotLight, halo;
 
 function init() {
   renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -41,6 +41,7 @@ function init() {
   halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTex, transparent: true, opacity: 0, depthWrite: false }));
   halo.scale.set(2.2, 2.2, 1);
   dot.add(halo);
+  dot.visible = false; // only its halo texture is reused for the balls
   scene.add(dot);
 
   rebuild('fit');
@@ -72,7 +73,6 @@ function rebuild(reason) {
   if (!scene) return;
   if (planGroup) { scene.remove(planGroup); planGroup.traverse((o) => { o.geometry && o.geometry.dispose(); }); }
   planGroup = new THREE.Group();
-  linkObjs = {};
   const [x1, y1, x2, y2] = bounds();
   const cx = (x1 + x2) / 2, cz = (y1 + y2) / 2, w = x2 - x1 + 4, d = y2 - y1 + 4;
 
@@ -104,19 +104,6 @@ function rebuild(reason) {
     const s = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 12), new THREE.MeshStandardMaterial({ color: 0x5ee0c1, emissive: 0x0d2a24 }));
     s.position.set(p[0], 0.8, p[1]);
     planGroup.add(s);
-    if (R) {
-      const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(R[0], 0.9, R[1]), new THREE.Vector3(p[0], 0.8, p[1])]);
-      const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0x5a6878, transparent: true, opacity: 0.5 }));
-      planGroup.add(line);
-      const z = S.zoneOf(R, p);
-      const zone = new THREE.Mesh(new THREE.CircleGeometry(1, 64), new THREE.MeshBasicMaterial({
-        map: zoneTex(), color: 0x7ff3ff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }));
-      zone.scale.set(z.a, z.b, 1);
-      zone.rotation.set(-Math.PI / 2, 0, -z.angle);
-      zone.position.set(z.cx, 0.03, z.cy);
-      planGroup.add(zone);
-      linkObjs[mac] = { line, zone };
-    }
   }
   scene.add(planGroup);
   if (reason === 'fit' || !camera.userData.placed) {
@@ -137,32 +124,44 @@ function resize() {
   camera.updateProjectionMatrix();
 }
 
-const cool = new THREE.Color(0x5a6878), live = new THREE.Color(0x5ee0c1), hot = new THREE.Color(0xe8fdff);
 function animate() {
   requestAnimationFrame(animate);
   if (S.view !== '3d') return;
   if (JSON.stringify(S.effPlan()) !== epSig) rebuild(); // placeholder layout follows the captured devices
   controls.update();
-  const st = S.state;
-  const links = (st && st.links) || [];
-  for (const [mac, o] of Object.entries(linkObjs)) {
-    const l = links.find((x) => x.mac === mac);
-    const on = l && !l.stale;
-    const k = on ? Math.min(1, l.score / (2 * l.threshold)) : 0;
-    o.line.material.color.copy(on ? live.clone().lerp(hot, k) : cool);
-    o.line.material.opacity = on ? 0.45 + 0.55 * k : 0.35;
-    o.zone.material.opacity = 0.8 * S.zoneLevel(mac);
-  }
-  const D = S.dot;
-  const I = D ? D.k * (D.rough ? 0.5 : 1) : 0;
-  if (D) dot.position.set(D.x, 1.0, D.y);
-  dot.visible = I > 0.02;
-  const pulse = 1 + 0.08 * Math.sin(performance.now() / 250);
-  dot.material.opacity = D && D.rough ? 0 : I;
-  halo.material.opacity = 0.9 * I;
-  halo.scale.setScalar((D && D.rough ? 3.5 : 1.6 + 1.6 * I) * pulse);
-  dotLight.intensity = 4 * I;
+  syncBalls();
   renderer.render(scene, camera);
+}
+
+// one glowing sphere + halo + light per moving body, and its trail
+const ballObjs = {};
+function syncBalls() {
+  for (const [id, o] of Object.entries(S.balls)) {
+    let b = ballObjs[id];
+    if (!b) {
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.2, 24, 16), new THREE.MeshBasicMaterial({ color: 0xe8fdff, transparent: true }));
+      const light = new THREE.PointLight(0x7ff3ff, 0, 6, 1.5);
+      const h = new THREE.Sprite(new THREE.SpriteMaterial({ map: halo.material.map, transparent: true, depthWrite: false }));
+      mesh.add(light); mesh.add(h);
+      const trail = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x7ff3ff, transparent: true }));
+      scene.add(mesh); scene.add(trail);
+      b = ballObjs[id] = { mesh, light, h, trail };
+    }
+    const pulse = 1 + 0.08 * Math.sin(performance.now() / 250);
+    b.mesh.position.set(o.x, 1.0, o.y);
+    b.mesh.material.opacity = o.k;
+    b.h.material.opacity = 0.9 * o.k;
+    b.h.scale.setScalar((1.2 + 2 * Math.min(1, o.spread || 0)) * pulse);
+    b.light.intensity = 4 * o.k;
+    b.trail.geometry.setFromPoints(o.trail.map((p) => new THREE.Vector3(p[0], 0.05, p[1])));
+    b.trail.material.opacity = 0.6 * o.k;
+  }
+  for (const [id, b] of Object.entries(ballObjs)) {
+    if (S.balls[id]) continue;
+    scene.remove(b.mesh); scene.remove(b.trail);
+    b.mesh.geometry.dispose(); b.trail.geometry.dispose();
+    delete ballObjs[id];
+  }
 }
 
 S.zoom3d = (f) => {

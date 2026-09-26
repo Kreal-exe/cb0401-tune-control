@@ -72,59 +72,39 @@ function labelOf(mac) {
   const st = stationOf(mac);
   return S.plan.names[mac] || (st && st.name) || mac;
 }
-// The zone of a link: an ellipse with the router and the device as foci,
-// about 0.7 m either side of the line (never thinner than 15% of its length).
-function zoneOf(R, p) {
-  const L = Math.hypot(p[0] - R[0], p[1] - R[1]);
-  const b = Math.max(0.7, 0.15 * L);
-  return { cx: (R[0] + p[0]) / 2, cy: (R[1] + p[1]) / 2, a: Math.sqrt((L / 2) ** 2 + b * b), b, angle: Math.atan2(p[1] - R[1], p[0] - R[0]) };
+let frameT = performance.now();
+function updateAnim() {
+  const now = performance.now(), dt = Math.min(0.2, (now - frameT) / 1000); frameT = now;
+  updateBalls(dt);
 }
-S.zoneOf = zoneOf;
-// How lit a link's zone is, 0..1: how far past its own threshold, eased
-// in and out so a flicker of one update doesn't blink the map.
-const zoneK = {};
-let zoneT = performance.now();
-function updateZones() {
-  const now = performance.now(), dt = Math.min(0.2, (now - zoneT) / 1000); zoneT = now;
-  for (const l of (S.state && S.state.links) || []) {
-    const target = !l.stale && l.motion ? Math.min(1, 0.35 + 0.65 * (l.score - l.threshold) / Math.max(0.2, l.threshold)) : 0;
-    const cur = zoneK[l.mac] || 0;
-    zoneK[l.mac] = cur + (target - cur) * Math.min(1, dt / (target > cur ? 0.4 : 1.2));
-  }
-  updateDot(dt);
-}
-const zoneLevel = (mac) => zoneK[mac] || 0;
-S.zoneLevel = zoneLevel;
 
-// The dot: where the movement is. With taught spots it comes from the
-// server (most similar taught moments vote); without, a rough stand-in at
-// the lit zones' weighted middle, drawn big and faint because that is all
-// it is.
-const dot = { x: 0, y: 0, k: 0, rough: true, spread: 0 };
-function updateDot(dt) {
-  const pos = S.state && S.state.pos;
-  let tx = null, ty = null, target = 0, rough = true, spread = 1.5;
-  if (pos && pos.placed && teach.spots.length >= 2) {
-    tx = pos.x; ty = pos.y; target = pos.intensity; rough = false; spread = pos.spread;
-  } else {
-    const EP = effPlan(), R = EP.router;
-    let w = 0, x = 0, y = 0;
-    if (R) for (const [mac, p] of Object.entries(EP.devices)) {
-      const k = zoneLevel(mac);
-      if (k < 0.05) continue;
-      const z = zoneOf(R, p);
-      w += k; x += k * z.cx; y += k * z.cy;
-    }
-    if (w > 0) { tx = x / w; ty = y / w; target = Math.min(1, w); }
+// Balls: the moving bodies the server's tracker reports, eased between
+// updates, each leaving a fading trail of where it went.
+S.balls = {};
+let trailT = 0;
+function updateBalls(dt) {
+  const tr = S.state && S.state.track;
+  const bodies = (tr && tr.bodies) || [];
+  const seen = new Set();
+  const now = performance.now();
+  const addTrail = now - trailT > 150;
+  if (addTrail) trailT = now;
+  for (const b of bodies) {
+    seen.add(b.id);
+    let o = S.balls[b.id];
+    if (!o) o = S.balls[b.id] = { x: b.x, y: b.y, k: 0, trail: [] };
+    const a = Math.min(1, dt / 0.35);
+    o.x += (b.x - o.x) * a; o.y += (b.y - o.y) * a;
+    const target = Math.min(1, 0.35 + b.share);
+    o.k += (target - o.k) * Math.min(1, dt / 0.3);
+    o.spread = b.spread; o.speed = b.speed;
   }
-  if (tx !== null) {
-    if (dot.k < 0.05) { dot.x = tx; dot.y = ty; }
-    else { const a = Math.min(1, dt / 0.6); dot.x += (tx - dot.x) * a; dot.y += (ty - dot.y) * a; }
-    dot.rough = rough; dot.spread = spread;
+  for (const [id, o] of Object.entries(S.balls)) {
+    if (!seen.has(+id)) o.k -= o.k * Math.min(1, dt / 0.8);
+    if (addTrail) { o.trail.push([o.x, o.y, now]); if (o.trail.length > 60) o.trail.shift(); }
+    if (!seen.has(+id) && o.k < 0.02) delete S.balls[id];
   }
-  dot.k += (target - dot.k) * Math.min(1, dt / (target > dot.k ? 0.3 : 1.0));
 }
-S.dot = dot;
 function distToSeg(p, a, b) {
   const [px, py] = p, [ax, ay] = a, [bx, by] = b;
   const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy;
@@ -168,7 +148,7 @@ function planChanged(auto) {
 // --------------------------------------------------------------- drawing ---
 function draw() {
   requestAnimationFrame(draw);
-  updateZones();
+  updateAnim();
   if (S.view !== '2d') return;
   const r = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, r.width, r.height);
@@ -180,22 +160,8 @@ function draw() {
   for (let x = Math.floor(wx1); x <= wx2; x++) { const [sx] = toScreen(x, 0); ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, r.height); ctx.stroke(); }
   for (let y = Math.floor(wy1); y <= wy2; y++) { const [, sy] = toScreen(0, y); ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(r.width, sy); ctx.stroke(); }
 
-  // links router -> device, lit by motion
   const EP = effPlan();
   const R = EP.router;
-  if (R) {
-    for (const [mac, p] of Object.entries(EP.devices)) {
-      const l = linkOf(mac);
-      const [ax, ay] = toScreen(R[0], R[1]), [bx, by] = toScreen(p[0], p[1]);
-      const live = l && !l.stale;
-      const k = live ? Math.min(1, l.score / (2 * l.threshold)) : 0;
-      ctx.lineWidth = 2 + 6 * k;
-      ctx.strokeStyle = !live ? 'rgba(90,104,120,0.35)' : `rgba(${Math.round(94 + 33 * k)},${Math.round(224 + 19 * k)},${Math.round(193 + 62 * k)},${0.35 + 0.6 * k})`;
-      ctx.setLineDash(live ? [] : [6, 6]);
-      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
-      ctx.setLineDash([]);
-    }
-  }
 
   // walls
   ctx.strokeStyle = '#c9d3de'; ctx.lineCap = 'round';
@@ -213,57 +179,25 @@ function draw() {
     ctx.fillText(Math.hypot(e[0] - wallStart[0], e[1] - wallStart[1]).toFixed(1) + ' m', (ax + bx) / 2 + 6, (ay + by) / 2 - 6);
   }
 
-  // movement zones: for every link that sees movement, a soft ellipse
-  // around its router-device line (roughly where a person would have to
-  // be to disturb it); overlapping zones add up and glow brighter. With a
-  // few links this is honestly all the position the data holds.
-  if (R) {
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    for (const [mac, p] of Object.entries(EP.devices)) {
-      const k = zoneLevel(mac);
-      if (k < 0.02) continue;
-      const z = zoneOf(R, p);
-      const [cx, cy] = toScreen(z.cx, z.cy);
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      const dpr = window.devicePixelRatio || 1;
-      ctx.scale(dpr, dpr);
-      ctx.translate(cx, cy); ctx.rotate(z.angle); ctx.scale(z.a * scale, z.b * scale);
-      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
-      g.addColorStop(0, `rgba(127,243,255,${0.55 * k})`);
-      g.addColorStop(0.6, `rgba(94,224,193,${0.25 * k})`);
-      g.addColorStop(1, 'rgba(94,224,193,0)');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
+  // moving bodies: a glowing ball each, with the trail of where it went
+  for (const o of Object.values(S.balls)) {
+    const now = performance.now();
+    ctx.lineCap = 'round';
+    for (let i = 1; i < o.trail.length; i++) {
+      const [x1, y1] = toScreen(o.trail[i - 1][0], o.trail[i - 1][1]), [x2, y2] = toScreen(o.trail[i][0], o.trail[i][1]);
+      const age = (now - o.trail[i][2]) / 9000;
+      ctx.strokeStyle = `rgba(127,243,255,${Math.max(0, 0.5 * (1 - age)) * o.k})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
     }
-    ctx.restore();
-    const dpr = window.devicePixelRatio || 1;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-
-  // taught spots
-  ctx.font = '11px sans-serif';
-  teach.spots.forEach((sp, i) => {
-    const [sx, sy] = toScreen(sp.x, sp.y);
-    ctx.strokeStyle = 'rgba(242,179,91,0.55)'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(sx, sy, 6, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = 'rgba(242,179,91,0.8)'; ctx.fillText(String(i + 1), sx + 8, sy - 6);
-  });
-  if (teach.active && teach.at) {
-    const [sx, sy] = toScreen(teach.at[0], teach.at[1]);
-    const pulse = 10 + 4 * Math.sin(performance.now() / 200);
-    ctx.strokeStyle = '#f2b35b'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, pulse, 0, Math.PI * 2); ctx.stroke();
-  }
-  // the dot
-  if (dot.k > 0.02) {
-    const [sx, sy] = toScreen(dot.x, dot.y);
-    const rad = dot.rough ? Math.max(40, 1.2 * scale) : Math.max(22, Math.min(2, 0.4 + dot.spread) * scale * 0.6);
+    const [sx, sy] = toScreen(o.x, o.y);
+    const rad = Math.max(18, Math.min(1.6, 0.35 + (o.spread || 0)) * scale);
     const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, rad);
-    const a = dot.rough ? 0.45 * dot.k : 0.9 * dot.k;
-    g.addColorStop(0, `rgba(255,255,255,${a})`);
-    g.addColorStop(dot.rough ? 0.5 : 0.25, `rgba(127,243,255,${a * 0.6})`);
+    g.addColorStop(0, `rgba(255,255,255,${0.95 * o.k})`);
+    g.addColorStop(0.2, `rgba(127,243,255,${0.7 * o.k})`);
     g.addColorStop(1, 'rgba(127,243,255,0)');
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(sx, sy, rad, 0, Math.PI * 2); ctx.fill();
-    if (!dot.rough) { ctx.fillStyle = `rgba(240,253,255,${dot.k})`; ctx.beginPath(); ctx.arc(sx, sy, 6, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = `rgba(240,253,255,${o.k})`; ctx.beginPath(); ctx.arc(sx, sy, 7, 0, Math.PI * 2); ctx.fill();
   }
 
   // devices
@@ -271,7 +205,7 @@ function draw() {
   for (const [mac, p] of Object.entries(EP.devices)) {
     const [sx, sy] = toScreen(p[0], p[1]);
     const l = linkOf(mac);
-    ctx.fillStyle = l && !l.stale ? (l.motion ? '#7ff3ff' : '#5ee0c1') : '#5a6878';
+    ctx.fillStyle = l && !l.stale ? '#5ee0c1' : '#5a6878';
     ctx.beginPath(); ctx.arc(sx, sy, 7, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#dde6ef'; ctx.fillText(labelOf(mac) + (EP.virtual ? ' (not placed)' : ''), sx + 10, sy + 4);
   }
@@ -303,7 +237,6 @@ function hitMarker(p) {
 canvas.addEventListener('pointerdown', (ev) => {
   const p = pointerWorld(ev);
   cursor = p;
-  if (!editing && teach.picking) { teachStart(p); return; }
   if (!editing) { panning = { x: ev.clientX, y: ev.clientY, o: { ...origin } }; canvas.setPointerCapture(ev.pointerId); return; }
   if (placing) { S.plan.devices[placing] = snap(p); placing = null; setHint(); planChanged(); renderDevices(); return; }
   if (tool === 'wall') {
@@ -505,12 +438,12 @@ function renderSummary() {
   if (!s) { el.textContent = 'Waiting for data…'; return; }
   const live = (s.links || []).filter((l) => !l.stale);
   const moving = live.filter((l) => l.motion && !l.learning);
-  const placeHint = !S.plan.router ? '<br><span style="color:#f2b35b">Positions are placeholders. Click <b>Edit plan</b> to draw walls and put the router and devices where they really are.</span>' : '';
-  if (!live.length) { el.innerHTML = 'No capture data from the router.' + placeHint; return; }
-  if (live.every((l) => l.learning)) { el.innerHTML = 'Learning the normal signal level, about 10 seconds…' + placeHint; return; }
-  const speed = Math.max(0, ...moving.map((l) => l.speed || 0));
-  const where = teach.spots.length >= 2 ? '' : `, near the line to ${moving.map((l) => escapeHtml(labelOf(l.mac))).join(', ')}`;
-  el.innerHTML = (moving.length ? `<b>Movement</b>${where}${speed ? ` · about ${speed.toFixed(1)} m/s` : ''}` : 'Quiet: no movement') + placeHint;
+  if (!live.length) { el.innerHTML = 'No capture data from the router.'; return; }
+  if (live.every((l) => l.learning)) { el.innerHTML = 'Learning the normal signal level, about 10 seconds…'; return; }
+  const tr = s.track || {};
+  if (!tr.ready) { el.innerHTML = (moving.length ? '<b>Movement</b> · ' : '') + `<span style="color:#f2b35b">${escapeHtml(tr.reason || '')}</span>`; return; }
+  const n = (tr.bodies || []).length;
+  el.innerHTML = n ? `<b>${n === 1 ? 'Someone is moving' : n + ' moving bodies'}</b>` + ((tr.bodies[0] && tr.bodies[0].speed) ? ` · about ${tr.bodies[0].speed.toFixed(1)} m/s` : '') : 'Quiet: no movement';
 }
 
 // Poll the newest state a few times a second. (An event stream never got
@@ -532,7 +465,7 @@ async function poll() {
   } catch (e) { $('status').textContent = 'reconnecting…'; $('status').className = 'pill bad'; }
   setTimeout(poll, 300);
 }
-function connect() { poll(); recPoll(); teachPoll(); }
+function connect() { poll(); recPoll(); }
 
 // ------------------------------------------------------------- recording ---
 let recState = { recording: false };
@@ -552,46 +485,6 @@ async function recCall(body) {
 function recPoll() { recCall(); setTimeout(recPoll, 1000); }
 $('recToggle').onclick = () => recCall({ action: recState.recording ? 'stop' : 'start' });
 document.querySelectorAll('.rec-labels button').forEach((b) => b.onclick = () => recCall({ action: 'mark', label: b.dataset.label }));
-
-// ------------------------------------------------------------- teaching ---
-const teach = { spots: [], active: false, picking: false, at: null, check: -1, left: 0, samples: 0 };
-function renderTeach() {
-  const b = $('teachBtn');
-  b.textContent = teach.active ? 'Stop' : teach.picking ? 'Cancel' : 'Teach a spot';
-  b.classList.toggle('on', teach.active || teach.picking);
-  let info;
-  if (teach.picking) info = 'Stand where you want to teach, then click that spot on the plan.';
-  else if (teach.active) info = `Walk slowly in a small circle around this spot… ${teach.left}s left, ${teach.samples} moments with movement`;
-  else if (!teach.spots.length) info = 'No spots yet. Until you teach at least two, the dot is only a rough glow between the lit links.';
-  else info = `${teach.spots.length} spot${teach.spots.length > 1 ? 's' : ''} taught` + (teach.check >= 0 ? ` · spots told apart ${Math.round(teach.check * 100)}% of the time` : '') + (teach.spots.length < 2 ? ' · teach one more' : '');
-  $('teachInfo').textContent = info;
-  $('teachClear').hidden = !teach.spots.length || teach.active;
-}
-async function teachCall(body) {
-  try {
-    const r = await fetch('api/teach', body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
-    if (r.ok) {
-      const st = await r.json();
-      if (teach.active && !st.active) teach.at = null;
-      Object.assign(teach, { spots: st.spots || [], active: st.active, check: st.check, left: st.left, samples: st.samples });
-      renderTeach();
-    }
-  } catch (e) {}
-}
-function teachStart(p) {
-  teach.picking = false; teach.at = p; canvas.classList.remove('picking');
-  teachCall({ action: 'start', x: p[0], y: p[1] });
-}
-function teachPoll() { teachCall(); setTimeout(teachPoll, teach.active ? 1000 : 3000); }
-$('teachBtn').onclick = () => {
-  if (teach.active) { teachCall({ action: 'stop' }); return; }
-  teach.picking = !teach.picking;
-  if (teach.picking && editing) $('editToggle').click();
-  if (teach.picking && S.view !== '2d') setView('2d');
-  canvas.classList.toggle('picking', teach.picking);
-  renderTeach();
-};
-$('teachClear').onclick = () => { if (confirm('Forget all taught spots?')) teachCall({ action: 'clear' }); };
 
 let userMovedView = false; // after the user pans or zooms, stop auto-fitting
 async function init() {

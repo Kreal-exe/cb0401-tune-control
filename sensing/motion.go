@@ -1,7 +1,6 @@
 package main
 
-// Motion detection per link (router <-> one Wi-Fi client) from CFR, and the
-// light dot on the floor plan.
+// Motion detection per link (router <-> one Wi-Fi client) from CFR.
 //
 // Each record is cleaned up first (csi.go: per-chain gain, the client's
 // transmit states, random phase/timing, glitches). The metric is then the
@@ -74,6 +73,7 @@ type LinkState struct {
 	Stale     bool    `json:"stale"`     // no frames for a few seconds
 	RSSI      int     `json:"rssi"`
 
+	Chains  int       `json:"chains"`            // receive chains in this link's captures
 	States  int       `json:"states"`            // transmit states seen (antennas/modes the client alternates)
 	Doppler []float64 `json:"doppler,omitempty"` // dB above the quiet level, per path speed in dopplerV (-2.5..2.5 m/s)
 	Speed   float64   `json:"speed"`             // how fast the moving path length changes, m/s (0 when still)
@@ -82,19 +82,10 @@ type LinkState struct {
 	SigQ    float64   `json:"sig_q"`             // 0..1, how much of the movement is one clean reflection
 }
 
-// Dot is the light on the plan: where movement is, roughly, and how much.
-type Dot struct {
-	X         float64 `json:"x"`
-	Y         float64 `json:"y"`
-	Intensity float64 `json:"intensity"` // 0..1
-	Placed    bool    `json:"placed"`    // false when no moving link has both ends on the plan
-}
-
 type analyzer struct {
 	mu        sync.Mutex
 	links     map[string]*link
 	threshold float64
-	dot       Dot
 	lastTick  time.Time
 	span      map[string]time.Duration // observed time each dump file covers, per radio
 }
@@ -217,10 +208,8 @@ func percentile(vals []float64, p float64) float64 {
 	return c[int(p*float64(len(c)-1))]
 }
 
-// tick updates every link's metric and score and the dot. plan supplies
-// where the router and the devices are (devices without a position don't
-// move the dot).
-func (a *analyzer) tick(now time.Time, pl Plan) ([]LinkState, Dot) {
+// tick updates every link's metric, score and movement description.
+func (a *analyzer) tick(now time.Time) []LinkState {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	dt := tickEvery.Seconds()
@@ -230,7 +219,6 @@ func (a *analyzer) tick(now time.Time, pl Plan) ([]LinkState, Dot) {
 	a.lastTick = now
 
 	var states []LinkState
-	var wSum, xSum, ySum float64
 	for mac, l := range a.links {
 		// drop old frames / arrivals / history
 		cut := 0
@@ -284,43 +272,17 @@ func (a *analyzer) tick(now time.Time, pl Plan) ([]LinkState, Dot) {
 			MAC: mac, Rate: frameRate(l.frames), Metric: l.metric, Baseline: l.baseline,
 			Score: l.score, Motion: !stale && len(l.hist) >= warmupSamples && l.score > thr,
 			Threshold: thr, Noisy: thr > 8, Learning: len(l.hist) < warmupSamples,
-			Stale: stale, RSSI: int(l.rssi), States: len(l.dsp.states),
+			Stale: stale, RSSI: int(l.rssi), States: len(l.dsp.states), Chains: l.chains,
 		}
 		if !stale && l.baseline > 0 {
 			a.describeMovement(l, &st, win)
 		}
 		states = append(states, st)
 
-		if st.Motion && pl.Router != nil {
-			if p, ok := pl.Devices[mac]; ok {
-				w := l.score / thr // how far past its own threshold
-				wSum += w
-				xSum += w * (pl.Router[0] + p[0]) / 2
-				ySum += w * (pl.Router[1] + p[1]) / 2
-			}
-		}
 	}
 	sort.Slice(states, func(i, j int) bool { return states[i].MAC < states[j].MAC })
 
-	// The dot: glide toward the weighted middle of the moving links,
-	// fade in/out with the total amount of movement.
-	target := math.Min(1, wSum/2.5)
-	if wSum > 0 {
-		tx, ty := xSum/wSum, ySum/wSum
-		if !a.dot.Placed || a.dot.Intensity < 0.05 {
-			a.dot.X, a.dot.Y = tx, ty
-		} else {
-			k := math.Min(1, dt/1.2)
-			a.dot.X += (tx - a.dot.X) * k
-			a.dot.Y += (ty - a.dot.Y) * k
-		}
-		a.dot.Placed = true
-	}
-	a.dot.Intensity += (target - a.dot.Intensity) * math.Min(1, dt/0.8)
-	if a.dot.Intensity < 0.01 {
-		a.dot.Intensity = 0
-	}
-	return states, a.dot
+	return states
 }
 
 func dB(x float64) float64 { return 10 * math.Log10(x) }
