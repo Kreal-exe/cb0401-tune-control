@@ -394,8 +394,8 @@ function drawDoppler(cv, hist) {
   hist.forEach((col, i) => {
     const rh = h / col.length;
     col.forEach((db, j) => {
-      const k = Math.max(0, Math.min(1, db / 20));
-      if (k < 0.05) return;
+      const k = Math.max(0, Math.min(1, (db - 4) / 16));
+      if (k <= 0) return;
       g.fillStyle = `rgba(${Math.round(94 + 150 * k)},${Math.round(224 + 29 * k)},${Math.round(193 + 62 * k)},${k})`;
       g.fillRect((off + i) * cw, h - (j + 1) * rh, Math.ceil(cw), Math.ceil(rh));
     });

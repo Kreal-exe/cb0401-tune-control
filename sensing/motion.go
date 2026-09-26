@@ -75,7 +75,7 @@ type LinkState struct {
 	RSSI      int     `json:"rssi"`
 
 	States  int       `json:"states"`            // transmit states seen (antennas/modes the client alternates)
-	Doppler []float64 `json:"doppler,omitempty"` // dB above baseline per path speed in dopplerV (-2.5..2.5 m/s)
+	Doppler []float64 `json:"doppler,omitempty"` // dB above the quiet level, per path speed in dopplerV (-2.5..2.5 m/s)
 	Speed   float64   `json:"speed"`             // how fast the moving path length changes, m/s (0 when still)
 	Toward  float64   `json:"toward"`            // -1..1: path mostly lengthening (-) or shortening (+); sign not yet verified
 	Sig     []float64 `json:"sig,omitempty"`     // angle signature, degrees, chains 1..3 vs chain 0
@@ -347,9 +347,20 @@ func (a *analyzer) describeMovement(l *link, st *LinkState, win []csiFrame) {
 	P := doppler(newest(l.frames, dopplerWindow), lambda, st.Rate)
 	st.Doppler = make([]float64, len(P))
 	floor := percentile(P, 0.5)
+	var total float64
+	for _, p := range P {
+		total += p
+	}
 	var wSum, vSum, sSum float64
 	for i, p := range P {
-		st.Doppler[i] = math.Round(10*dB(math.Max(p, 1e-12)/l.baseline)) / 10
+		// each speed's share of the moving power, against the share it would
+		// have if the link's normal (quiet) level were spread evenly: 0 dB is
+		// "nothing here", +15..20 dB a clear walk at that speed
+		share := 0.0
+		if total > 0 {
+			share = p / total * float64(len(P)) * l.metric / l.baseline
+		}
+		st.Doppler[i] = math.Round(10*dB(math.Max(share, 1e-3))) / 10
 		v := dopplerV[i]
 		if math.Abs(v) < 0.3 {
 			continue
