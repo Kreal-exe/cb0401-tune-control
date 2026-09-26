@@ -40,8 +40,9 @@ const (
 	baselineWindow = 10 * time.Minute
 	tickEvery      = 250 * time.Millisecond
 	staleAfter     = 3 * time.Second
-	minFrames      = 10 // per metric window
-	warmupSamples  = 40 // ~10 s of ticks before a link reports a score
+	minFrames      = 10  // per metric window
+	warmupSamples  = 40  // ~10 s of ticks before a link reports a score
+	noiseSamples   = 480 // ~2 min before a link's threshold adapts to its noise
 )
 
 type frame struct {
@@ -280,8 +281,14 @@ func (a *analyzer) tick(now time.Time, pl Plan) ([]LinkState, Dot) {
 				l.baseline = percentile(l.hist, 0.2)
 				if l.baseline > 0 {
 					raw = math.Max(0, l.metric/l.baseline-1)
-					band := (percentile(l.hist, 0.75) - l.baseline) / l.baseline
-					l.thr = math.Max(a.threshold, 2*band)
+					// Adapt the threshold to the link's noise only once there
+					// are ~2 minutes of history: someone walking during the
+					// first minute otherwise reads as "this link is noisy".
+					l.thr = a.threshold
+					if len(l.hist) >= noiseSamples {
+						band := (percentile(l.hist, 0.75) - l.baseline) / l.baseline
+						l.thr = math.Max(a.threshold, 2*band)
+					}
 				}
 			}
 		}

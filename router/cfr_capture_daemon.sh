@@ -101,7 +101,9 @@ PERIODICITY_MS=20
 # Movement is seen along each link's path, so several stationary, awake
 # devices in different directions cover more of the home (sensing.sh
 # --links changes it; the firmware has an unknown cap on periodic peers -
-# "max periodic cfr clients reached" - 4 worked in testing).
+# "max periodic cfr clients reached" - 4 worked in testing). Pin the
+# stationary ones with PEERS: automatic choice can't tell a TV from a
+# phone, and a phone's link fluctuates whenever its owner moves.
 MAX_PEERS=4
 PEERS=""
 BAND=both
