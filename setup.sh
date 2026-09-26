@@ -115,10 +115,28 @@ else
     else
       echo "You will be asked for the router's SSH password now — the derived default"
       echo "described in the README's 'How SSH access is opened' section, or whatever"
-      echo "you've since changed it to."
+      echo "you've since changed it to (e.g. through the GUI's Change root password)."
       echo
-      ssh "${SSH_OPTS[@]}" "root@$ROUTER_IP" "$INSTALL_CMD" \
-        || die "Could not reach the router over SSH with that password either. Check that it's reachable at $ROUTER_IP."
+      if command -v sshpass >/dev/null 2>&1 && [ -t 0 ]; then
+        # Read it here rather than letting ssh prompt, so a password that
+        # works gets remembered in gui/.env below - the GUI's self-heal and
+        # the next setup run need it, and before this fix .env only ever
+        # held the placeholder "root", which never matches a changed one.
+        KNOWN_PASSWORD=""
+        for _attempt in 1 2 3; do
+          read -r -s -p "root@$ROUTER_IP password: " TYPED_PASSWORD; echo
+          if sshpass -p "$TYPED_PASSWORD" ssh "${SSH_OPTS[@]}" "root@$ROUTER_IP" "$INSTALL_CMD" 2>/dev/null; then
+            KNOWN_PASSWORD="$TYPED_PASSWORD"
+            break
+          fi
+          echo "That password was rejected."
+        done
+        unset TYPED_PASSWORD
+        [ -n "$KNOWN_PASSWORD" ] || die "Could not log in to the router over SSH with that password. Check that it's reachable at $ROUTER_IP and see the README for the derived default."
+      else
+        ssh "${SSH_OPTS[@]}" "root@$ROUTER_IP" "$INSTALL_CMD" \
+          || die "Could not reach the router over SSH with that password either. Check that it's reachable at $ROUTER_IP."
+      fi
     fi
   fi
 fi
@@ -126,6 +144,39 @@ fi
 ssh "${SSH_OPTS[@]}" -i "$KEY_PATH" -o BatchMode=yes "root@$ROUTER_IP" true \
   || die "Key-based login still fails after installing the key — check the router's dropbear config."
 echo "Key-based SSH login confirmed. No more passwords needed from here on."
+
+# /etc/dropbear/authorized_keys sits on this router's ramfs-mounted /etc,
+# so the key installed above vanishes on every router reboot (confirmed:
+# after one, both the key and a stale .env password were rejected and
+# nothing could log in). Keep a copy in /etc/crontabs/patches - persistent
+# storage, the same place ssh_patch.sh lives - and put it back within a
+# minute of every boot.
+PUBKEY="$(cat "$KEY_PATH.pub")"
+if {
+  echo "mkdir -p /etc/crontabs/patches"
+  echo "echo '$PUBKEY' > /etc/crontabs/patches/toolkit_key.pub"
+  cat <<'KEEP_KEY_REMOTE'
+cat > /etc/crontabs/patches/keep_ssh_key.sh <<'KEEP_KEY_EOF'
+#!/bin/sh
+# Re-adds cb0401-tune-control's SSH key after a reboot wiped the ramfs /etc.
+K=/etc/crontabs/patches/toolkit_key.pub
+[ -s "$K" ] || exit 0
+mkdir -p /etc/dropbear
+grep -qF "$(cat "$K")" /etc/dropbear/authorized_keys 2>/dev/null && exit 0
+cat "$K" >> /etc/dropbear/authorized_keys
+chmod 600 /etc/dropbear/authorized_keys
+KEEP_KEY_EOF
+chmod +x /etc/crontabs/patches/keep_ssh_key.sh
+sed -i '/keep_ssh_key.sh/d' /etc/crontabs/root
+echo '* * * * * sh /etc/crontabs/patches/keep_ssh_key.sh >/dev/null 2>&1' >> /etc/crontabs/root
+/etc/init.d/cron restart >/dev/null 2>&1 || true
+sh /etc/crontabs/patches/keep_ssh_key.sh
+KEEP_KEY_REMOTE
+} | ssh "${SSH_OPTS[@]}" -i "$KEY_PATH" -o BatchMode=yes "root@$ROUTER_IP" sh; then
+  echo "The key is now restored automatically after router reboots."
+else
+  echo "NOTE: couldn't install the key-restore job; after a router reboot, re-run ./start.sh."
+fi
 
 # --- 4. Notifications: ntfy.sh or Telegram, + device-monitor scripts -------
 
@@ -296,9 +347,16 @@ fi
 
 say "Setting up the local GUI"
 
+# Keep the root password .env already had (the GUI's Change root password
+# writes it there) unless a different one was just typed and accepted
+# above. This used to be hard-coded to "root", silently wiping the real
+# password on every setup run.
+if [ -z "${KNOWN_PASSWORD:-}" ] && [ -f "$ENV_FILE" ] && grep -q '^ROUTER_ROOT_PASSWORD=' "$ENV_FILE"; then
+  KNOWN_PASSWORD="$(grep '^ROUTER_ROOT_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
+fi
 cat > "$ENV_FILE" <<EOF
 ROUTER_IP=$ROUTER_IP
-ROUTER_ROOT_PASSWORD=root
+ROUTER_ROOT_PASSWORD=${KNOWN_PASSWORD:-root}
 NOTIFY_BACKEND=$NOTIFY_BACKEND
 NTFY_TOPIC=$NTFY_TOPIC
 TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN

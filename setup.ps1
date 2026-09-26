@@ -335,9 +335,17 @@ if (-not $cleanupFlags) {
 Say 'Setting up the local GUI'
 Set-Location $RepoDir
 
+# Keep the root password .env already had (the GUI's Change root password
+# writes it there) - this used to be hard-coded to "root", silently wiping
+# the real one on every setup run.
+$keepPassword = 'root'
+if (Test-Path $EnvFile) {
+    $pwLine = Get-Content $EnvFile | Where-Object { $_ -match '^ROUTER_ROOT_PASSWORD=' }
+    if ($pwLine) { $keepPassword = ($pwLine -split '=', 2)[1] }
+}
 @"
 ROUTER_IP=$RouterIp
-ROUTER_ROOT_PASSWORD=root
+ROUTER_ROOT_PASSWORD=$keepPassword
 NOTIFY_BACKEND=$notifyBackend
 NTFY_TOPIC=$ntfyTopic
 TELEGRAM_BOT_TOKEN=$telegramBotToken
