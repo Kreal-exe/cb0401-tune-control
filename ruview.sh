@@ -269,7 +269,7 @@ git -C "$RUVIEW_DIR" submodule update --init --depth 1
 # (confirmed live). Patched: stay on the live source, show RECONNECTING,
 # retry every few seconds; the last live frame stays on screen meanwhile.
 # Idempotent; skipped with a note if upstream changed those lines.
-python3 - "$RUVIEW_DIR/ui/observatory/js/main.js" <<'EOF' || echo "(Observatory reconnect patch not applied)"
+python3 - "$RUVIEW_DIR/ui/observatory/js/main.js" <<'EOF' || echo "(Observatory patch not applied)"
 import sys
 p = sys.argv[1]
 s = open(p).read()
@@ -294,11 +294,24 @@ new_none = """        // cb0401-tune-control patch: keep looking instead of sett
         clearTimeout(this._reconnectTimer);
         this._reconnectTimer = setTimeout(() => this._autoDetectLive(), 5000);
         return;"""
-if old_close not in s or old_none not in s:
-    print("Observatory source changed upstream - reconnect patch not applied")
+old_msg = """      this._ws.onmessage = (evt) => { try { this._liveData = JSON.parse(evt.data); } catch {} };"""
+new_msg = """      // cb0401-tune-control patch: hold the last vitals (5 s) and figures
+      // (1.5 s, while presence holds) across updates that don't carry them -
+      // at ~50 updates/s about half lack one or the other, and showing only
+      // the latest made the panel read "--" and the figure flicker.
+      this._ws.onmessage = (evt) => { try {
+        const d = JSON.parse(evt.data); const now = performance.now();
+        if (d.vital_signs) { this._heldVitals = d.vital_signs; this._heldVitalsAt = now; }
+        else if (this._heldVitals && now - this._heldVitalsAt < 5000) d.vital_signs = this._heldVitals;
+        if (d.persons && d.persons.length) { this._heldPersons = d.persons; this._heldPersonsAt = now; }
+        else if (this._heldPersons && now - this._heldPersonsAt < 1500 && d.classification && d.classification.presence) d.persons = this._heldPersons;
+        this._liveData = d;
+      } catch {} };"""
+if old_close not in s or old_none not in s or old_msg not in s:
+    print("Observatory source changed upstream - Observatory patch not applied")
     sys.exit(0)
-open(p, "w").write(s.replace(old_close, new_close).replace(old_none, new_none))
-print("Observatory reconnect patch applied")
+open(p, "w").write(s.replace(old_close, new_close).replace(old_none, new_none).replace(old_msg, new_msg))
+print("Observatory patch applied")
 EOF
 
 # Second local patch, to sensing-server itself (src/main.rs). Three parts:
