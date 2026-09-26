@@ -70,6 +70,8 @@
 #
 # Modes: same --daemon/--ensure/--stop/--restart convention as
 # command_watcher.sh/sms_notify.sh. No argument = one reconcile pass.
+# Not started from cron: ruview.sh runs it with --ensure while the
+# dashboard runs and --stop on exit (which also switches the timer off).
 #
 DIR=/etc/crontabs/patches
 TRIGGER="$DIR/cfr-trigger"
@@ -200,6 +202,13 @@ stop_readers() {
     READERS=""
 }
 
+disable_timer() {
+    for r in $RADIOS; do
+        [ -x "$TRIGGER" ] && "$TRIGGER" -iface "$r" -param "$TIMER_PARAM" -value 0 >>"$LOG" 2>&1
+    done
+    log "CFR periodic timer switched off"
+}
+
 daemon_pid() {
     [ -f "$PIDFILE" ] || return 1
     pid=$(cat "$PIDFILE" 2>/dev/null)
@@ -225,7 +234,7 @@ stop_all_stations() {
 
 run_daemon() {
     echo $$ >"$PIDFILE"
-    trap 'stop_readers; stop_all_captures; rm -f "$PIDFILE"; exit 0' TERM INT
+    trap 'stop_readers; stop_all_captures; disable_timer; rm -f "$PIDFILE"; exit 0' TERM INT
     log "daemon start: periodicity=${PERIODICITY_MS}ms max_peers=$MAX_PEERS pinned='$PEERS'"
     enable_timer
     stop_all_stations
@@ -243,14 +252,20 @@ run_daemon() {
 }
 
 stop_daemon() {
-    pid=$(daemon_pid) || return 0
-    kill "$pid" 2>/dev/null
-    # Give its trap a moment to stop the captures, then make sure no
-    # stray reader survives (a reader outliving the daemon would keep
-    # writing into /tmp with nobody rotating or collecting).
-    sleep 1
+    if pid=$(daemon_pid); then
+        kill "$pid" 2>/dev/null
+        # Give its trap a moment to stop the captures and the timer.
+        sleep 2
+    else
+        # No daemon (or its pidfile is gone): still make sure nothing is
+        # left capturing - every associated station and the timer.
+        stop_all_stations
+        disable_timer
+    fi
+    # Make sure no stray reader survives (it would keep writing into /tmp
+    # with nobody rotating or collecting).
     killall cfr_test_app 2>/dev/null
-    rm -f "$PIDFILE"
+    rm -f "$PIDFILE" /tmp/cfr_dump_wifi*.bin
 }
 
 case "$1" in

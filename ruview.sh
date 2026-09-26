@@ -216,24 +216,28 @@ if [ "$ROUTER_INSTALL" = 1 ]; then
   want="$(file_sum "$TMP_DIR/cfr-trigger") $(file_sum "$TMP_DIR/cfr_capture_daemon.sh")"
   have="$(ssh_router 'cd /etc/crontabs/patches 2>/dev/null && md5sum cfr-trigger cfr_capture_daemon.sh 2>/dev/null | cut -d" " -f1 | tr "\n" " " | sed "s/ $//"' 2>/dev/null || true)"
   if [ "$want" = "$have" ]; then
-    echo "already up to date on the router - making sure the daemon is running"
-    ssh_router 'sh /etc/crontabs/patches/cfr_capture_daemon.sh --ensure'
+    echo "already up to date on the router"
   else
     scp_to_router "$TMP_DIR/cfr-trigger" "$TMP_DIR/cfr_capture_daemon.sh" "root@$ROUTER_IP:/tmp/" >/dev/null
-    # mv, not cp-over: the daemon is a running sh script, and sh reads its
-    # script file incrementally - overwriting it in place would feed the
-    # running instance a half-new file. mv swaps the inode; the old
-    # instance keeps its old copy until --restart replaces it.
+    # Stop a running daemon first, then mv (not cp-over): sh reads its
+    # script incrementally, so overwriting a running one in place would
+    # feed it a half-new file.
     ssh_router 'mkdir -p /etc/crontabs/patches
+      sh /etc/crontabs/patches/cfr_capture_daemon.sh --stop 2>/dev/null
       mv /tmp/cfr-trigger /tmp/cfr_capture_daemon.sh /etc/crontabs/patches/
-      chmod +x /etc/crontabs/patches/cfr-trigger /etc/crontabs/patches/cfr_capture_daemon.sh
-      if ! grep -q "cfr_capture_daemon.sh --ensure" /etc/crontabs/root 2>/dev/null; then
-        echo "* * * * * sh /etc/crontabs/patches/cfr_capture_daemon.sh --ensure >/dev/null 2>&1" >> /etc/crontabs/root
-        /etc/init.d/cron restart >/dev/null 2>&1 || true
-      fi
-      sh /etc/crontabs/patches/cfr_capture_daemon.sh --restart'
-    echo "installed and (re)started; a once-a-minute cron line keeps it alive across reboots"
+      chmod +x /etc/crontabs/patches/cfr-trigger /etc/crontabs/patches/cfr_capture_daemon.sh'
+    echo "installed"
   fi
+  # Capture runs only while this script runs - started right before the
+  # bridge below, stopped (and the firmware's CFR timer switched off) on
+  # exit. Earlier versions kept it running permanently from a cron line,
+  # so it also restarted by itself after every router boot; the router
+  # rebooted twice within 20 minutes with that running (2026-09-26), so no
+  # more always-on capture. Remove that cron line from older installs.
+  ssh_router 'if grep -q cfr_capture_daemon /etc/crontabs/root 2>/dev/null; then
+      sed -i "/cfr_capture_daemon/d" /etc/crontabs/root
+      /etc/init.d/cron restart >/dev/null 2>&1 || true
+    fi'
   rm -rf "$TMP_DIR"
 fi
 
@@ -411,6 +415,9 @@ fi
 echo "sensing-server pid=$SENSING_PID (log: /tmp/ruview-sensing-server.log)"
 
 say "Starting ruview-bridge (pulls real CFR captures from $ROUTER_IP and forwards them)"
+ssh_router 'sh /etc/crontabs/patches/cfr_capture_daemon.sh --ensure' \
+  || { echo "Couldn't start CFR capture on the router." >&2; exit 1; }
+CAPTURE_STARTED=1
 "$REPO_DIR/router/ruview-bridge/ruview-bridge" \
   -key "$ROUTER_KEY" \
   -host "root@$ROUTER_IP" \
@@ -428,6 +435,11 @@ cleanup() {
   echo "Stopping RuView processes ($PIDS)..."
   # shellcheck disable=SC2086
   kill $PIDS 2>/dev/null
+  if [ "${CAPTURE_STARTED:-0}" = 1 ]; then
+    echo "Stopping CFR capture on the router..."
+    ssh_router 'sh /etc/crontabs/patches/cfr_capture_daemon.sh --stop' 2>/dev/null \
+      || echo "(couldn't reach the router to stop capture - it stops at the next router reboot, or run: ssh root@$ROUTER_IP sh /etc/crontabs/patches/cfr_capture_daemon.sh --stop)"
+  fi
 }
 trap cleanup EXIT INT TERM
 
